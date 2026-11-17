@@ -10,10 +10,10 @@ class Config:
     fixed_delta: float = 0.05
     sensor_tick: float = 0.0
 
-    rgb_width: int = 1024
-    rgb_height: int = 576
-    aux_width: int = 384
-    aux_height: int = 216
+    rgb_width: int = 512
+    rgb_height: int = 288
+    aux_width: int = 192
+    aux_height: int = 108
     fov: int = 90
 
     vehicle_filter: str = "vehicle.tesla.model3"

@@ -114,16 +114,14 @@ class SensorManager:
         with self._lock:
             self._lane_invasions += 1
 
-    def frame_ids(self) -> dict[str, int]:
-        with self._lock:
-            return dict(self._ids)
-
-    def wait_for_frame(self, previous_ids: dict[str, int], timeout: float = 2.0) -> SensorFrame | None:
+    def wait_for_frame(self, target_frame: int, timeout: float = 2.0) -> SensorFrame | None:
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
             with self._lock:
-                updated = all(self._ids[key] != previous_ids.get(key, -1) for key in self._ids)
-                if updated and self._rgb is not None and self._seg is not None and self._depth is not None:
+                if any(frame_id > target_frame for frame_id in self._ids.values()):
+                    return None
+                matched = all(frame_id == target_frame for frame_id in self._ids.values())
+                if matched and self._rgb is not None and self._seg is not None and self._depth is not None:
                     velocity = self._vehicle.get_velocity()
                     speed_kmh = 3.6 * math.sqrt(velocity.x ** 2 + velocity.y ** 2 + velocity.z ** 2)
                     return SensorFrame(
@@ -134,7 +132,7 @@ class SensorManager:
                         speed_kmh=speed_kmh,
                         collisions=self._collisions,
                         lane_invasions=self._lane_invasions,
-                        frame=max(self._ids.values()),
+                        frame=target_frame,
                         timestamp=self._timestamp,
                     )
             time.sleep(0.001)

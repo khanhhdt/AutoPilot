@@ -154,6 +154,7 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = parse_args()
+    cv2.setNumThreads(1)
     client = carla.Client(args.host, args.port)
     client.set_timeout(CFG.timeout)
     world = client.get_world()
@@ -205,6 +206,9 @@ def main() -> None:
     lane_gt_valid_count = 0
     observed_yaws = []
     observed_junctions = []
+    tick_wait_ms = []
+    write_ms = []
+    sensor_timeouts = 0
     try:
         if args.weather is not None:
             world.set_weather(WEATHER[args.weather])
@@ -253,16 +257,22 @@ def main() -> None:
             for index in range(args.frames):
                 if planner is not None:
                     ego.actor.apply_control(planner.run_step())
-                previous = sensors.frame_ids()
-                world.tick()
-                frame = sensors.wait_for_frame(previous)
+                tick_start = time.perf_counter()
+                target_frame = world.tick()
+                frame = sensors.wait_for_frame(target_frame)
+                tick_wait_ms.append((time.perf_counter() - tick_start) * 1000.0)
                 if frame is None:
+                    sensor_timeouts += 1
                     print("WARN: sensor timeout, bỏ qua frame", flush=True)
                     continue
 
-                cv2.imwrite(str(session_dir / "rgb" / f"{index:06d}.png"), frame.rgb)
-                cv2.imwrite(str(session_dir / "seg" / f"{index:06d}.png"), frame.seg_tags)
+                write_start = time.perf_counter()
+                rgb_ok = cv2.imwrite(str(session_dir / "rgb" / f"{index:06d}.png"), frame.rgb)
+                seg_ok = cv2.imwrite(str(session_dir / "seg" / f"{index:06d}.png"), frame.seg_tags)
+                if not rgb_ok or not seg_ok:
+                    raise OSError(f"could not write sensor images for frame {index}")
                 np.save(session_dir / "depth" / f"{index:06d}.npy", frame.depth)
+                write_ms.append((time.perf_counter() - write_start) * 1000.0)
 
                 transform = ego.actor.get_transform()
                 try:
@@ -375,6 +385,14 @@ def main() -> None:
             "elapsed_s": round(elapsed, 2),
             "avg_fps": round(written / max(elapsed, 1e-6), 2),
             "fixed_delta": CFG.fixed_delta,
+            "sensor_sync": "exact_tick_frame_id",
+            "sensor_timeouts": sensor_timeouts,
+            "camera_height_m": 1.7,
+            "camera_pitch_deg": 0.0,
+            "timing_ms": {
+                "tick_and_sensor_wait_p95": float(np.percentile(tick_wait_ms, 95)) if tick_wait_ms else None,
+                "sensor_write_p95": float(np.percentile(write_ms, 95)) if write_ms else None,
+            },
             "rgb_width": CFG.rgb_width,
             "rgb_height": CFG.rgb_height,
             "aux_width": CFG.aux_width,
