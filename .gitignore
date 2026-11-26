@@ -1,11 +1,8 @@
 __pycache__/
 *.pyc
 *.whl
-*.md
 output/
 data/
 logs/
 tests/
 .venv/
-
-!docs/architecture.md
