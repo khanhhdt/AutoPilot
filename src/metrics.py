@@ -21,7 +21,8 @@ LIVE_FIELDS = (
 PHASE4_FIELDS = (
     "phase4_state", "phase4_target_speed_kmh", "phase4_obstacle_count", "phase4_lead_kind", "phase4_gap_m",
     "phase4_left_clear", "phase4_right_clear", "phase4_change_started", "phase4_change_completed",
-    "phase4_target_blocker", "scenario_gap_m",
+    "phase4_target_blocker", "scenario_gap_m", "closing_mps", "visibility_m", "speed_limit_kmh",
+    "lane_reference", "lateral_accel_mps2",
 )
 
 

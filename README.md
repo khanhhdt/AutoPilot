@@ -213,6 +213,24 @@ Waypoint làn đích cấp điểm nhìn cho pure pursuit trong lúc chuyển l�
 xe tiếp tục giữ làn từ ảnh. Gặp người đi bộ, mất ảnh đồng bộ hoặc làn đích bị
 chặn giữa thao tác thì bộ điều khiển phanh.
 
+Với tốc độ mục tiêu trên 15 km/h, xe hạ mục tiêu xuống tối đa 12 km/h khi
+phát hiện vật cản trong phạm vi 30 m và có làn kề hợp lệ. Xe bắt đầu vượt khi
+tốc độ thực không quá 15 km/h, còn đủ khoảng cách dọc và làn đích trống trong
+ba tick liên tiếp. Nếu làn đích bị chiếm, xe tiếp tục giảm tốc theo khoảng cách.
+
+Khi `--driver avoid` nhận mục tiêu trên 20 km/h, chế độ thích ứng tăng ảnh
+semantic/depth lên 384×216 và dùng bộ lọc vật cản tới 65 m. Tốc độ chạy bị giới
+hạn bởi độ cong, vùng mặt đường quan sát được và mức tối đa 40 km/h. Khoảng
+chuẩn bị vượt thay đổi theo tốc độ thực và tốc độ khép khoảng cách. Bộ điều
+khiển giữ ngưỡng 15 km/h khi bắt đầu vượt và kiểm tra vùng làn đích qua cửa
+sổ dự đoán 4 giây từ hộp bao và vận tốc actor CARLA.
+
+Khi mất vạch ngắn, xe chỉ dùng tham chiếu bản đồ cùng làn nếu vị trí, hướng
+và vùng quan sát còn phù hợp. Mục tiêu trong chế độ dự phòng tối đa 10 km/h.
+Mất vạch kéo dài hoặc mất frame đồng bộ sẽ yêu cầu phanh. Log từng tick
+có `visibility_m`, `speed_limit_kmh`, `closing_mps`, nguồn tham chiếu và gia tốc ngang.
+Xem [kiểm chứng tốc độ thích ứng](docs/adaptive_speed.md) cho ma trận 20–40 km/h.
+
 Suite chạy tuần tự trên world rảnh ở chế độ async. Có 10 lần dừng trước rào
 chắn với làn kế bên có xe, 4 lần xe Traffic Manager cắt vào, 3 lần người đi bộ
 băng qua và 3 lần đổi làn để vượt xe đỗ. `summary.json` trong `output/phase4/`
@@ -236,10 +254,11 @@ thư mục in ra sau bài chạy. Bỏ `--save-video` để đo FPS khi không g
 Unit test hình học và telemetry chạy offline. Xem [báo cáo kiểm chứng và giới
 hạn](docs/phase5-6.md).
 
-Để dựng bản demo hai ô RGB và overlay, mỗi ô dùng camera gốc 1024×576.
-Video ghép dài 60 giây và xuất ở 30 FPS từ nguồn mô phỏng 20 Hz.
+Để dựng bản demo hai ô RGB và overlay, dùng `--video-hd 1920` cho mỗi ô
+1920×1080 hoặc `--video-hd` cho 1024×576. Video ghép dài 60 giây và xuất
+ở 30 FPS từ nguồn mô phỏng 20 Hz.
 
 ```bash
-.venv/bin/python -m scripts.run_suite --host localhost --port 3000 --video-hd --out output/phase6/demo_hd
-.venv/bin/python -m scripts.make_demo --hd-60 --ffmpeg /usr/bin/ffmpeg output/phase6/demo_hd/run_<id>/summary.json
+.venv/bin/python -m scripts.run_suite --host localhost --port 3000 --video-hd 1920 --out output/phase6/demo_fhd
+.venv/bin/python -m scripts.make_demo --hd-60 --ffmpeg /usr/bin/ffmpeg output/phase6/demo_fhd/run_<id>/summary.json
 ```

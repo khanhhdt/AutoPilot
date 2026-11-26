@@ -20,10 +20,11 @@ class Obstacle:
 
 class ObstacleDetector:
     def __init__(self, fov_deg: float = 90., camera_x_m: float = 1.6,
-                 camera_height_m: float = 1.7) -> None:
+                 camera_height_m: float = 1.7, max_range_m: float = 45.) -> None:
         self.fov_scale = 2 * tan(radians(fov_deg) / 2)
         self.camera_x_m = camera_x_m
         self.camera_height_m = camera_height_m
+        self.max_range_m = max_range_m
 
     def detect(self, semantic: SemanticMasks, depth: np.ndarray) -> list[Obstacle]:
         height, width = depth.shape
@@ -40,7 +41,7 @@ class ObstacleDetector:
                 ranges = depth[ys + y, xs + x]
                 sideways = ((xs + x + 0.5 - width / 2) / focal) * ranges
                 elevation = self.camera_height_m + ((height / 2 - ys - y - 0.5) / focal) * ranges
-                valid = np.isfinite(ranges) & (ranges > .25) & (ranges < 45)
+                valid = np.isfinite(ranges) & (ranges > .25) & (ranges < self.max_range_m)
                 valid &= (elevation > -.55) & (elevation < 3.5)
                 if np.count_nonzero(valid) < 4:
                     continue

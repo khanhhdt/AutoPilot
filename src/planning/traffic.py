@@ -8,6 +8,7 @@ import numpy as np
 
 from src.perception.obstacles import Obstacle, ObstacleDetector
 from src.planning.decision import Lead
+from src.planning.speed import swept_overlap
 
 
 def relative(transform: carla.Transform, point: carla.Location) -> tuple[float, float, float]:
@@ -39,7 +40,8 @@ def nearest_lead(obstacles: list[Obstacle], waypoint: carla.Waypoint | None,
         lateral = relative(pose, center.transform.location)[1] if center else 0.
         half_width = min(1.55, (waypoint.lane_width * .44) if waypoint else 1.35)
         if obstacle.left_m <= lateral + half_width and obstacle.right_m >= lateral - half_width:
-            return Lead(obstacle.kind, max(0., obstacle.forward_m - bumper_m))
+            return Lead(obstacle.kind, max(0., obstacle.forward_m - bumper_m),
+                        (obstacle.left_m + obstacle.right_m) / 2 - lateral)
     return None
 
 
@@ -81,9 +83,31 @@ def adjacent_lanes(origin: carla.Waypoint) -> dict[str, carla.Waypoint]:
     return result
 
 
+def road_horizon(lane: carla.Waypoint, pose: carla.Transform, road: np.ndarray,
+                 detector: ObstacleDetector) -> tuple[float, float]:
+    """Verified road probes and maximum map curvature over the lookahead."""
+    visible = curvature = 0.
+    previous, previous_distance = lane, 0.
+    for distance in (9., 16., 24., 32., 40., 48., 56.):
+        point = ahead(lane, distance)
+        if point is None or point.is_junction:
+            break
+        turn = (point.transform.rotation.yaw - previous.transform.rotation.yaw + 180.) % 360. - 180.
+        curvature = max(curvature, abs(radians(turn)) / (distance - previous_distance))
+        right = point.transform.get_right_vector()
+        offset = min(1.15, point.lane_width * .33)
+        probes = [relative(pose, point.transform.location + carla.Location(
+            x=lateral * right.x, y=lateral * right.y, z=lateral * right.z))
+            for lateral in (-offset, 0., offset)]
+        if detector.road_visible(road, probes):
+            visible = distance
+        previous, previous_distance = point, distance
+    return visible, curvature
+
+
 def lane_blocker(lane: carla.Waypoint, pose: carla.Transform, ego_speed_kmh: float,
                  actors: list[carla.Actor], obstacles: list[Obstacle], road: np.ndarray,
-                 detector: ObstacleDetector) -> str | None:
+                 detector: ObstacleDetector, *, predict: bool = False) -> str | None:
     if lane.is_junction:
         return "junction"
     forward_limit = max(24., ego_speed_kmh / 3.6 * 4.)
@@ -103,10 +127,20 @@ def lane_blocker(lane: carla.Waypoint, pose: carla.Transform, ego_speed_kmh: flo
             xs, ys = (forward - 1., forward + 1.), (lateral - 1., lateral + 1.)
         velocity = actor.get_velocity()
         axis = lane.transform.get_forward_vector()
-        closing = max(0., velocity.x * axis.x + velocity.y * axis.y - ego_speed_kmh / 3.6)
+        along = velocity.x * axis.x + velocity.y * axis.y + velocity.z * axis.z
+        closing = max(0., along - ego_speed_kmh / 3.6)
         rear_buffer = max(10., 5. + 3. * closing)
         if min(xs) <= forward_limit and max(xs) >= -rear_buffer and min(ys) <= half_width and max(ys) >= -half_width:
             return "actor"
+        if predict:
+            right = lane.transform.get_right_vector()
+            across = velocity.x * right.x + velocity.y * right.y + velocity.z * right.z
+            # The ego traverses the target lane at the maneuver speed. Check the
+            # swept actor box in that moving frame, including side entries.
+            ego_along = min(ego_speed_kmh, 10.) / 3.6
+            if swept_overlap(((min(xs), max(xs)), (min(ys), max(ys))), (along - ego_along, across),
+                             ((-8., 12.), (-half_width, half_width)), 4.):
+                return "predicted_actor"
 
     probes = []
     for distance in (9., 13., 17., 21.):

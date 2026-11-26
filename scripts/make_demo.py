@@ -30,12 +30,17 @@ def main() -> None:
     intro_trim = 0.
     if args.hd_60:
         durations = {}
+        rgb_size = None
         for name in CLIPS:
             if name not in reports:
                 parser.error(f"missing successful case: {name}")
             report = json.loads(reports[name].read_text())
-            if report.get("video_layout") != "rgb-overlay" or report.get("rgb_size") != [1024, 576]:
+            size = report.get("rgb_size")
+            if report.get("video_layout") != "rgb-overlay" or size not in ([1024, 576], [1920, 1080]):
                 parser.error(f"{name} needs a video recorded with --video-hd")
+            if rgb_size is not None and rgb_size != size:
+                parser.error("all inputs must have the same camera resolution")
+            rgb_size = size
             durations[name] = report["frames"] / report["video_fps_sim"]
         intro_trim = min(max(0., sum(durations.values()) - 60.), max(0., durations["clear-road"] - 2.))
     for index, (name, (title, start, end)) in enumerate(CLIPS.items()):

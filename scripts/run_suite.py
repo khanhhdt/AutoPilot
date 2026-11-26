@@ -83,12 +83,13 @@ def main() -> int:
     parser.add_argument("--out", type=Path, default=Path("output/phase5"))
     parser.add_argument("--case", choices=CASES, help="run a single case for a quick verification")
     parser.add_argument("--save-video", action="store_true")
-    parser.add_argument("--video-hd", action="store_true", help="save native HD RGB and overlay only")
+    parser.add_argument("--video-hd", nargs="?", const=1024, type=int, choices=(1024, 1920),
+                        help="save RGB and overlay only at this native RGB width (default 1024)")
     args = parser.parse_args()
     root = args.out / datetime.now().strftime("run_%Y%m%d_%H%M%S_%f")
     planned = tuple((name, 0) for name in (CASES if args.case is None else (args.case,)))
     try:
-        summary = run_trials(planned, root, args.host, args.port, args.save_video or args.video_hd,
+        summary = run_trials(planned, root, args.host, args.port, args.save_video or args.video_hd is not None,
                              video_hd=args.video_hd)
     except RuntimeError as exc:
         parser.error(str(exc))

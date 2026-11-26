@@ -54,7 +54,7 @@ def traffic_ids(world: carla.World) -> set[int]:
         ("vehicle.", "sensor.", "walker.", "static.prop."))}
 
 
-def run_trials(planned: tuple, root: Path, host: str, port: int, save_video: bool, *, video_hd: bool = False) -> dict:
+def run_trials(planned: tuple, root: Path, host: str, port: int, save_video: bool, *, video_hd: int | None = None) -> dict:
     client = carla.Client(host, port)
     client.set_timeout(120.)
     world = client.get_world()
@@ -85,7 +85,7 @@ def run_trials(planned: tuple, root: Path, host: str, port: int, save_video: boo
             if save_video:
                 argv.append("--save-video")
             if video_hd:
-                argv.append("--video-hd")
+                argv.extend(["--video-hd", str(video_hd)])
             try:
                 path = drive(argv) / "report.json"
                 report = json.loads(path.read_text())

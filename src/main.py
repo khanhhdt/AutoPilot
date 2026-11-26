@@ -43,7 +43,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--weather", choices=("clear", "rain"), default=None)
     parser.add_argument("--out", type=Path, default=Path("output/live"), help="parent directory for a new run")
     parser.add_argument("--save-video", action="store_true", help="save the live RGB/semantic/lane view")
-    parser.add_argument("--video-hd", action="store_true", help="record the two-panel view with native 1024×576 RGB")
+    parser.add_argument("--video-hd", nargs="?", const=1024, type=int, choices=(1024, 1920),
+                        help="record the two-panel view at this native RGB width (default 1024)")
     args = parser.parse_args(argv)
     if args.video_hd and not args.save_video:
         parser.error("--video-hd requires --save-video")
@@ -103,7 +104,11 @@ def build_view(frame, lane, fps: float, control: dict | None = None,
 
 def main(argv: list[str] | None = None) -> Path:
     args = parse_args(argv)
-    sensor_cfg = replace(CFG, rgb_width=1024, rgb_height=576) if args.video_hd else CFG
+    sensor_cfg = (replace(CFG, rgb_width=args.video_hd, rgb_height=args.video_hd * 9 // 16)
+                  if args.video_hd else CFG)
+    adaptive_speed = args.driver == "avoid" and args.target_speed > 20.
+    if adaptive_speed:
+        sensor_cfg = replace(sensor_cfg, aux_width=384, aux_height=216)
     cv2.setNumThreads(1)
     client = carla.Client(args.host, args.port)
     client.set_timeout(CFG.timeout)
@@ -175,7 +180,7 @@ def main(argv: list[str] | None = None) -> Path:
             )
             if args.driver == "avoid":
                 box = ego.actor.bounding_box
-                avoidance = AvoidanceController(CFG.fov, box.location.x + box.extent.x)
+                avoidance = AvoidanceController(CFG.fov, box.location.x + box.extent.x, adaptive=adaptive_speed)
                 ego.apply(brake=1.)
                 for _ in range(5):
                     if sensors.wait_for_frame(world.tick()) is not None:
@@ -184,7 +189,7 @@ def main(argv: list[str] | None = None) -> Path:
                     raise RuntimeError("Phase 4 cameras did not initialize")
         print(f"ego {ego.actor.type_id} | driver {args.driver} | target {1.0 / CFG.fixed_delta:.0f} Hz | "
               f"rgb {sensor_cfg.rgb_width}x{sensor_cfg.rgb_height} | "
-              f"aux {CFG.aux_width}x{CFG.aux_height} | output {output}", flush=True)
+              f"aux {sensor_cfg.aux_width}x{sensor_cfg.aux_height} | output {output}", flush=True)
         start = time.monotonic()
         window_start = start
         window_frames = 0
@@ -272,7 +277,15 @@ def main(argv: list[str] | None = None) -> Path:
                                    phase4_right_clear=assessment.clear.get("right", False),
                                    phase4_change_started=decision.start_side,
                                    phase4_change_completed=assessment.completed,
-                                   phase4_target_blocker=assessment.target_blocker)
+                                   phase4_target_blocker=assessment.target_blocker,
+                                   closing_mps=assessment.lead.closing_mps if assessment.lead else None,
+                                   visibility_m=assessment.visible_m, speed_limit_kmh=assessment.speed_limit_kmh,
+                                   lane_reference=assessment.reference)
+                        if adaptive_speed:
+                            acceleration = ego.actor.get_acceleration()
+                            right = transform.get_right_vector()
+                            row["lateral_accel_mps2"] = (
+                                acceleration.x * right.x + acceleration.y * right.y + acceleration.z * right.z)
                         aux_height, aux_width = frame.seg_tags.shape
                         height, width = lane.overlay.shape[:2]
                         for obstacle in assessment.obstacles:
@@ -417,7 +430,8 @@ def main(argv: list[str] | None = None) -> Path:
                       weather=args.weather or "unchanged", rgb_size=[sensor_cfg.rgb_width, sensor_cfg.rgb_height],
                       perception_rgb_size=[CFG.rgb_width, CFG.rgb_height],
                       video_layout=("rgb-overlay" if args.video_hd else "rgb-semantic-overlay") if args.save_video else None,
-                      aux_size=[CFG.aux_width, CFG.aux_height], sensor_sync="exact_tick_frame_id",
+                      aux_size=[sensor_cfg.aux_width, sensor_cfg.aux_height], adaptive_speed=adaptive_speed,
+                      sensor_sync="exact_tick_frame_id",
                       input_mode=("RGB + semantic tags + depth + CARLA lane and actor geometry"
                                   if avoidance else "RGB + simulator road mask"),
                       perception_mode="live_in_tick_loop",
