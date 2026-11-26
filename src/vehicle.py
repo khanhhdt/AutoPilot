@@ -40,6 +40,6 @@ class EgoVehicle:
         return 3.6 * math.sqrt(velocity.x ** 2 + velocity.y ** 2 + velocity.z ** 2)
 
     def destroy(self) -> None:
-        if self.actor is not None and self.actor.is_alive:
+        if self.actor is not None:
             self.actor.destroy()
-        self.actor = None
+            self.actor = None

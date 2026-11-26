@@ -5,18 +5,25 @@ quyết định real-time và tránh vật cản.
 
 ## Yêu cầu
 
-- CARLA server 0.9.16 chạy trên máy GPU (RPC `:3000`, streaming `:3001`)
-- Python 3.11 + `carla` 0.9.16, OpenCV, numpy
-- Mạng giữa client và server ≥ 20 MB/s (đo bằng `iperf3`), WiFi nên tắt power save
+- CARLA Server 0.9.16 đã chạy trên máy có GPU, với RPC `:3000` và streaming `:3001`.
+- Python 3.11 trên Linux x86-64 cho các wheel trong `requirements.txt`.
+- FFmpeg có `libx264` và `drawtext` nếu dựng lại video demo ghép.
 
-## Cài đặt
+## Tái lập từ clone sạch
+
+Dùng Python 3.11 làm lệnh `python`, đứng ở thư mục repo và để server ở chế độ
+async với world rảnh. Ba lệnh tạo môi trường riêng, cài các phiên bản đã chốt và
+chạy một ca vượt xe đỗ có ghi video.
 
 ```bash
-conda activate carla
-pip install -r requirements.txt
-# carla: cài từ wheel của server
-pip install carla-0.9.16-cp311-cp311-manylinux_2_31_x86_64.whl
+python -m venv .venv
+.venv/bin/python -m pip install -r requirements.txt
+.venv/bin/python -m scripts.run_suite --host localhost --port 3000 --case avoid --save-video
 ```
+
+Trong `output/phase5/run_*/` có `report.md`, `metrics.csv`, `metrics.json` và
+`summary.json`. Thư mục phiên bên dưới chứa `frames.csv`, `report.json` và
+`live.mp4`. Lệnh trả exit code khác 0 nếu bài chạy trượt.
 
 ## Chạy
 
@@ -136,7 +143,7 @@ về benchmark, audit và cách ghi bộ dữ liệu kiểm tra tiếp theo.
   camera phía server, phụ thuộc độ phức tạp cảnh. Tailscale và LAN đều khoảng
   12–13 FPS; bỏ decode hoặc giảm payload còn 1/4 không khôi phục 20 FPS.
 - Ghi nhận 19–21 FPS trước đây chưa tái lập được trong cấu hình hiện tại.
-  Xem [báo cáo đo lại Phase 1](docs/phase1_performance.md) và
+  Xem [báo cáo đo lại Phase 1](docs/phase1.md) và
   `python -m scripts.benchmark_harness --help` để tái lập.
 
 ## Cấu trúc
@@ -180,3 +187,59 @@ steer/throttle/brake, target pursuit, sai số làn tham chiếu và các check 
 <3 km/h sau 5 s ổn định, giới hạn bước steer và đảo chiều lặp nhanh. Sai số khi
 khởi hành vẫn được báo riêng. Bài tune ngắn chưa đủ thời lượng sẽ không PASS
 toàn bộ. Xem [thiết kế, tham số và kết quả Phase 3](docs/phase3.md).
+
+## Phase 4 — Phát hiện và tránh vật cản
+
+```bash
+# Chạy chế độ tránh vật cản trên map đang mở
+python -m src.main --host localhost --port 3000 --driver avoid --no-display
+
+# Chạy một kịch bản và ghi video
+python -m scripts.scenarios --scenario avoid --save-video
+
+# Nghiệm thu M2 trên Town10HD_Opt
+python -m scripts.scenarios --suite
+```
+
+`--driver avoid` dùng các nhóm pixel xe, người và vật thể từ semantic segmentation
+của CARLA. Depth cùng tick cho khoảng cách đến mặt gần của vật cản và bề rộng
+chiếm làn. FSM ghi `CRUISE`, `FOLLOW`, `AVOID_L`, `AVOID_R` hoặc `STOP`
+vào `frames.csv` kèm khoảng cách, trạng thái làn kề và thời điểm chuyển làn.
+
+Xe chỉ bắt đầu tránh khi đoạn làn kề cùng chiều cho phép chuyển làn, vùng ảnh
+semantic cho thấy mặt đường trống và bounding box của các actor mô phỏng không
+chiếm vùng trước, bên hông hoặc sau. Đây là kiểm tra điểm mù dựa trên API CARLA.
+Waypoint làn đích cấp điểm nhìn cho pure pursuit trong lúc chuyển làn, sau đó
+xe tiếp tục giữ làn từ ảnh. Gặp người đi bộ, mất ảnh đồng bộ hoặc làn đích bị
+chặn giữa thao tác thì bộ điều khiển phanh.
+
+Suite chạy tuần tự trên world rảnh ở chế độ async. Có 10 lần dừng trước rào
+chắn với làn kế bên có xe, 4 lần xe Traffic Manager cắt vào, 3 lần người đi bộ
+băng qua và 3 lần đổi làn để vượt xe đỗ. `summary.json` trong `output/phase4/`
+lưu kết quả từng lượt, số lần dừng và số lần bắt đầu chuyển làn khi vùng kề
+không trống. Phạm vi nghiệm thu là các kịch bản mô phỏng ở 10 km/h, trời quang.
+
+## Phase 5–6 — Kiểm chứng và demo
+
+```bash
+.venv/bin/python -m unittest discover -s tests -v
+.venv/bin/python -m scripts.run_suite --host localhost --port 3000 --save-video
+.venv/bin/python -m scripts.make_demo output/phase5/run_<id>/summary.json
+```
+
+Nếu bản FFmpeg trong `PATH` thiếu `libx264`, truyền `--ffmpeg /usr/bin/ffmpeg`
+khi bản cài hệ thống có encoder này.
+
+Suite chạy sáu ca gồm giữ làn trên đường trống, dừng trước rào chắn, phản ứng
+với xe cắt vào, nhường người đi bộ, vượt trái và vượt phải. Thay `run_<id>` bằng
+thư mục in ra sau bài chạy. Bỏ `--save-video` để đo FPS khi không ghi video.
+Unit test hình học và telemetry chạy offline. Xem [báo cáo kiểm chứng và giới
+hạn](docs/phase5-6.md).
+
+Để dựng bản demo hai ô RGB và overlay, mỗi ô dùng camera gốc 1024×576.
+Video ghép dài 60 giây và xuất ở 30 FPS từ nguồn mô phỏng 20 Hz.
+
+```bash
+.venv/bin/python -m scripts.run_suite --host localhost --port 3000 --video-hd --out output/phase6/demo_hd
+.venv/bin/python -m scripts.make_demo --hd-60 --ffmpeg /usr/bin/ffmpeg output/phase6/demo_hd/run_<id>/summary.json
+```

@@ -1,5 +1,7 @@
 import csv
 import json
+from collections import deque
+from math import dist, isfinite
 from pathlib import Path
 
 import numpy as np
@@ -14,8 +16,45 @@ LIVE_FIELDS = (
     "is_junction", "collisions", "lane_invasions", "detected", "fresh",
     "missed_frames", "offset_px", "sim_elapsed_s", "target_speed_kmh",
     "steer", "throttle", "brake", "control_valid", "pursuit_forward_m", "pursuit_lateral_m",
-    "lane_error_m", "heading_error_rad", "lane_width_m", *TIMING_FIELDS,
+    "lane_error_m", "heading_error_rad", "lane_width_m", "distance_m", "ttc_s", *TIMING_FIELDS,
 )
+PHASE4_FIELDS = (
+    "phase4_state", "phase4_target_speed_kmh", "phase4_obstacle_count", "phase4_lead_kind", "phase4_gap_m",
+    "phase4_left_clear", "phase4_right_clear", "phase4_change_started", "phase4_change_completed",
+    "phase4_target_blocker", "scenario_gap_m",
+)
+
+
+class RunTelemetry:
+    """Odometry from consecutive poses and TTC from a short lead-range history."""
+
+    def __init__(self) -> None:
+        self.distance_m = 0.
+        self.position = None
+        self.lead_key = None
+        self.ranges = deque(maxlen=5)
+
+    def update(self, timestamp: float, position: tuple[float, float, float] | None,
+               lead_key: tuple | None = None, gap_m: float | None = None,
+               *, frame_gap: bool = False) -> dict:
+        if position is not None and self.position is not None and not frame_gap:
+            self.distance_m += dist(self.position, position)
+        self.position = position
+        valid_lead = position is not None and lead_key is not None and gap_m is not None and isfinite(gap_m)
+        if (not valid_lead or frame_gap or lead_key != self.lead_key or
+                self.ranges and (timestamp <= self.ranges[-1][0] or
+                                 abs(gap_m - self.ranges[-1][1]) > 30. * (timestamp - self.ranges[-1][0]))):
+            self.ranges.clear()
+        self.lead_key = lead_key if valid_lead else None
+        ttc_s = None
+        if valid_lead:
+            self.ranges.append((timestamp, gap_m))
+            if len(self.ranges) == self.ranges.maxlen:
+                first_t, first_gap = self.ranges[0]
+                closing = (first_gap - gap_m) / (timestamp - first_t)
+                if closing > .2:
+                    ttc_s = gap_m / closing
+        return {"distance_m": self.distance_m, "ttc_s": ttc_s}
 
 
 def summarize_live_run(rows: list[dict], elapsed_s: float, fixed_delta: float) -> dict:
@@ -25,6 +64,7 @@ def summarize_live_run(rows: list[dict], elapsed_s: float, fixed_delta: float) -
     non_junction = [row for row in valid if row["is_junction"] is False]
     moving = [row for row in valid if row.get("speed_kmh", 0) >= 1.0]
     budget_ms = fixed_delta * 1000.0
+    ttc = [row["ttc_s"] for row in valid if row.get("ttc_s") is not None]
     timing = {}
     for key in TIMING_FIELDS:
         values = [row[key] for row in rows]
@@ -58,13 +98,17 @@ def summarize_live_run(rows: list[dict], elapsed_s: float, fixed_delta: float) -
         ) if moving else None,
         "collisions": max((row.get("collisions", 0) for row in valid), default=0),
         "lane_invasions": max((row.get("lane_invasions", 0) for row in valid), default=0),
+        "distance_m": rows[-1].get("distance_m", 0.) if rows else 0.,
+        "min_ttc_s": min(ttc, default=None),
+        "ttc_samples": len(ttc),
         "timing_ms": timing,
     }
 
 
 def write_live_report(directory: Path, rows: list[dict], report: dict) -> None:
+    fields = (*LIVE_FIELDS, *PHASE4_FIELDS) if report.get("driver") == "avoid" else LIVE_FIELDS
     with (directory / "frames.csv").open("w", newline="") as handle:
-        writer = csv.DictWriter(handle, fieldnames=LIVE_FIELDS)
+        writer = csv.DictWriter(handle, fieldnames=fields)
         writer.writeheader()
         writer.writerows(rows)
     (directory / "report.json").write_text(json.dumps(report, indent=2, allow_nan=False) + "\n")

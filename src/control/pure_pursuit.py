@@ -62,6 +62,12 @@ class PurePursuit:
         camera_forward = focal * self.camera_height_m / (v - height / 2.)
         forward = camera_forward + self.camera_offset_m
         lateral = (u - width / 2.) * camera_forward / focal
+        return self.step_target(forward, lateral, speed_kmh, dt, u, v)
+
+    def step_target(self, forward: float, lateral: float, speed_kmh: float, dt: float,
+                    u: float = 0., v: float = 0.) -> PursuitCommand:
+        if dt <= 0 or forward <= 0:
+            raise ValueError("pursuit target must be ahead and dt must be positive")
         angle = math.atan2(2. * self.wheelbase_m * lateral, forward * forward + lateral * lateral)
         curve_speed, curve_scale = zip(*self.steering_curve)
         # CARLA/PhysX SteeringCurve abscissa is forward speed in km/h.

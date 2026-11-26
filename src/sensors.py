@@ -49,7 +49,11 @@ class SensorManager:
         self._collisions = 0
         self._lane_invasions = 0
         self._actors: list[carla.Actor] = []
-        self._spawn()
+        try:
+            self._spawn()
+        except (Exception, KeyboardInterrupt):
+            self.close()
+            raise
 
     def _camera(self, kind: str, width: int, height: int) -> carla.Actor:
         blueprint = self._world.get_blueprint_library().find(f"sensor.camera.{kind}")
@@ -63,9 +67,11 @@ class SensorManager:
 
     def _spawn(self) -> None:
         rgb_cam = self._camera("rgb", self._cfg.rgb_width, self._cfg.rgb_height)
+        self._actors.append(rgb_cam)
         seg_cam = self._camera("semantic_segmentation", self._cfg.aux_width, self._cfg.aux_height)
+        self._actors.append(seg_cam)
         depth_cam = self._camera("depth", self._cfg.aux_width, self._cfg.aux_height)
-        self._actors = [rgb_cam, seg_cam, depth_cam]
+        self._actors.append(depth_cam)
 
         blueprint_library = self._world.get_blueprint_library()
         collision_bp = blueprint_library.find("sensor.other.collision")
@@ -73,8 +79,9 @@ class SensorManager:
         lane_invasion_bp = blueprint_library.find("sensor.other.lane_invasion")
         lane_invasion_bp.set_attribute("role_name", "ego_project_lane_invasion")
         collision = self._world.spawn_actor(collision_bp, carla.Transform(), attach_to=self._vehicle)
+        self._actors.append(collision)
         lane_invasion = self._world.spawn_actor(lane_invasion_bp, carla.Transform(), attach_to=self._vehicle)
-        self._actors += [collision, lane_invasion]
+        self._actors.append(lane_invasion)
 
         rgb_cam.listen(self._on_rgb)
         seg_cam.listen(self._on_seg)
@@ -141,9 +148,12 @@ class SensorManager:
     def close(self) -> None:
         for actor in self._actors:
             try:
-                if actor.is_alive:
+                if actor.is_listening:
                     actor.stop()
-                    actor.destroy()
+            except RuntimeError:
+                pass
+            try:
+                actor.destroy()
             except RuntimeError:
                 pass
         self._actors = []

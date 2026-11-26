@@ -1,5 +1,8 @@
 # Sơ đồ hệ thống — Lane Detection + Object Avoidance (CARLA)
 
+Tài liệu này ghi thiết kế ban đầu. Xem [sơ đồ triển khai và số đo đã kiểm
+chứng](phase5-6.md) cho phiên bản Phase 5–6 trên localhost.
+
 Dự án: Autonomous Driving (Simulation)
 Tools: CARLA 0.9.16, OpenCV, Python 3.11
 Hạ tầng: CARLA server (GPU, 5GHz WiFi) ↔ client (Ubuntu) qua LAN/Tailscale

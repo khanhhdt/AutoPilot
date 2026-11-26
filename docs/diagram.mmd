@@ -1,13 +1,16 @@
 flowchart LR
   subgraph S[CARLA Server GPU]
-    W[World Town03] --> R[Renderer]
-    P[Physics 20Hz] --> W
+    W[World Town10HD_Opt] --> R[Renderer]
+    P[Physics 20 Hz simulation] --> W
   end
   subgraph C[Client Python]
-    CAM[Sensors RGB/Seg/Depth] --> PER[Perception lane + obstacles]
+    CAM[RGB / semantic / depth at the same tick] --> PER[Lane fits and obstacle range]
     PER --> PLAN[FSM planning]
     PLAN --> CTRL[Pure pursuit + PID]
-    CTRL --> LOG[Metrics/CSV]
+    PER --> LOG[Frame CSV and TTC]
+    CTRL --> LOG
+    LOG --> SUITE[Suite summary and demo]
   end
-  R -->|":3001 images"| CAM
-  CTRL -->|"VehicleControl :3000"| P
+  R -->|"Local streaming 3001"| CAM
+  CTRL -->|"Local RPC 3000"| P
+  W -->|"Lane topology and actor bounds"| PLAN
