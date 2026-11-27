@@ -3,32 +3,46 @@
 Mô phỏng xe tự hành trên CARLA: lane detection (OpenCV + semantic segmentation),
 quyết định real-time và tránh vật cản.
 
-## Yêu cầu
+## Nghiệm thu PoC từ clone sạch
 
-- CARLA Server 0.9.16 đã chạy trên máy có GPU, với RPC `:3000` và streaming `:3001`.
-- Python 3.11 trên Linux x86-64 cho các wheel trong `requirements.txt`.
-- FFmpeg có `libx264` và `drawtext` nếu dựng lại video demo ghép.
-
-## Tái lập từ clone sạch
-
-Dùng Python 3.11 làm lệnh `python`, đứng ở thư mục repo và để server ở chế độ
-async với world rảnh. Ba lệnh tạo môi trường riêng, cài các phiên bản đã chốt và
-chạy một ca vượt xe đỗ có ghi video.
+Dùng CARLA Server 0.9.16 trên máy GPU, cùng Python 3.11 và Linux x86-64.
+Khởi động CARLA trực tiếp trên Town10HD_Opt từ thư mục cài simulator.
 
 ```bash
-python -m venv .venv
-.venv/bin/python -m pip install -r requirements.txt
-.venv/bin/python -m scripts.run_suite --host localhost --port 3000 --case avoid --save-video
+./CarlaUE4.sh /Game/Carla/Maps/Town10HD_Opt -carla-rpc-port=3000 \
+  -RenderOffScreen -quality-level=Low -nosound
 ```
 
-Trong `output/phase5/run_*/` có `report.md`, `metrics.csv`, `metrics.json` và
-`summary.json`. Thư mục phiên bên dưới chứa `frames.csv`, `report.json` và
-`live.mp4`. Lệnh trả exit code khác 0 nếu bài chạy trượt.
+Để world ở chế độ async và dừng các client mô phỏng khác. Từ thư mục repo,
+tạo môi trường headless và chạy nghiệm thu qua `localhost:3000`.
+
+```bash
+python3.11 -m venv .venv
+.venv/bin/python -m pip install -r requirements-poc.txt
+ffmpeg -hide_banner -encoders | grep libx264
+ffmpeg -hide_banner -filters | grep drawtext
+.venv/bin/python -m scripts.verify_poc
+```
+
+Máy có nhiều bản FFmpeg có thể chỉ định hai đường dẫn trong lệnh nghiệm thu.
+
+```bash
+.venv/bin/python -m scripts.verify_poc --ffmpeg /usr/bin/ffmpeg --ffprobe /usr/bin/ffprobe
+```
+
+Lệnh chạy đối chứng A/B nhận diện làn, suite 20 ca, ca xe áp sát từ sau, các ca
+thời tiết và suite sáu ca ghi video. Log, CSV/JSON và `demo_hd_60s.mp4` nằm trong
+`output/poc/run_*/`. `summary.json` ghi môi trường và kết quả từng bước. Khi
+một bước trượt, lệnh trả mã thoát khác 0 và giữ các kết quả đã ghi.
+
+Bản demo dài 60 giây gồm sáu ca mô phỏng ở 10 km/h, với hai ô Full HD và tốc
+độ phát 30 FPS từ nguồn mô phỏng 20 Hz. Xem [kết quả PoC](docs/IMPROVEMENT.md)
+để biết phạm vi kiểm chứng.
 
 ## Chạy
 
 ```bash
-# đổi host nếu cần (mặc định 100.85.59.63)
+# đổi host nếu cần (mặc định 127.0.0.1)
 python -m src.main --duration 60            # ba ô RGB + semantic + lane overlay
 python -m src.main --duration 60 --no-display
 
@@ -124,7 +138,6 @@ python -m scripts.eval_lane --session data/raw/m1/session_* --save-video --save-
 Kiểm tra offline, không cần cài CARLA:
 
 ```bash
-python -m unittest discover -s tests -v
 python -m scripts.eval_lane --session data/raw/m1/session_* data/raw/m1_1024/session_* \
   --report output/phase2/report.json --audit-dir output/phase2/audit
 ```
@@ -241,7 +254,6 @@ không trống. Phạm vi nghiệm thu là các kịch bản mô phỏng ở 10 
 ## Phase 5–6 — Kiểm chứng và demo
 
 ```bash
-.venv/bin/python -m unittest discover -s tests -v
 .venv/bin/python -m scripts.run_suite --host localhost --port 3000 --save-video
 .venv/bin/python -m scripts.make_demo output/phase5/run_<id>/summary.json
 ```
@@ -252,8 +264,7 @@ khi bản cài hệ thống có encoder này.
 Suite chạy sáu ca gồm giữ làn trên đường trống, dừng trước rào chắn, phản ứng
 với xe cắt vào, nhường người đi bộ, vượt trái và vượt phải. Thay `run_<id>` bằng
 thư mục in ra sau bài chạy. Bỏ `--save-video` để đo FPS khi không ghi video.
-Unit test hình học và telemetry chạy offline. Xem [báo cáo kiểm chứng và giới
-hạn](docs/phase5-6.md).
+Xem [báo cáo kiểm chứng và giới hạn](docs/phase5-6.md).
 
 Để dựng bản demo hai ô RGB và overlay, dùng `--video-hd 1920` cho mỗi ô
 1920×1080 hoặc `--video-hd` cho 1024×576. Video ghép dài 60 giây và xuất
