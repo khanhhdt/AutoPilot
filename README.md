@@ -2,27 +2,40 @@
 
 PoC lái xe tự hành trong CARLA với nhận diện làn đường, giữ làn, phát hiện vật cản và chuyển làn để vượt khi làn đích trống.
 
-![AutoPilot vượt xe đỗ trên Town10HD với camera RGB bên trái và lớp phủ nhận diện làn, vật cản bên phải](docs/assets/autopilot-demo.gif)
+## Demo theo bản đồ và thời tiết
+
+Các GIF được ghi trực tiếp từ CARLA với mức đồ họa `Epic` cho cả hai chế độ thời tiết của PoC. Camera RGB ở bên trái, lớp phủ nhận diện ở bên phải.
+
+| Bản đồ | Trời quang (`clear`) | Trời mưa (`rain`) |
+|---|---|---|
+| **Town10HD_Opt** | ![Xe vượt xe đỗ trên Town10HD_Opt khi trời quang](docs/assets/autopilot-demo.gif)<br>Vượt xe đỗ | ![Xe giảm tốc khi một xe khác cắt vào làn trên Town10HD_Opt trong mưa](docs/assets/town10hd-rain.gif)<br>Giảm tốc khi xe khác cắt vào làn |
+| **Town04_Opt** | ![Xe nhường người đi bộ trên Town04_Opt khi trời quang](docs/assets/town04-clear.gif)<br>Nhường người đi bộ | ![Xe giữ làn bằng nhận diện RGB trên Town04_Opt trong mưa](docs/assets/town04-rain.gif)<br>Giữ làn bằng nhận diện RGB |
+| **Town05** | ![Xe giảm tốc khi phát hiện xe phía trước trên Town05 khi trời quang](docs/assets/town05-clear.gif)<br>Giảm tốc khi phát hiện xe phía trước | ![Xe giữ làn trên Town05 trong mưa](docs/assets/town05-rain.gif)<br>Giữ làn trong mưa |
 
 ## Cài đặt CARLA
 
 Các lệnh dưới đây tải bản CARLA 0.9.16 dùng cho PoC. [CARLA Quick Start](https://carla.readthedocs.io/en/latest/start_quickstart/) · [Bản phát hành 0.9.16](https://github.com/carla-simulator/carla/releases/tag/0.9.16)
 
 ```bash
-sudo apt update
-sudo apt install -y curl git ffmpeg libgl1 libglib2.0-0
-
-mkdir -p ~/simulators/carla-0.9.16
-cd ~/simulators/carla-0.9.16
+mkdir -p ~/carla-0.9.16
+cd ~/carla-0.9.16
 curl -fL -o CARLA_0.9.16.tar.gz https://downloads.carlasim.com/Linux/CARLA_0.9.16.tar.gz
 tar -xzf CARLA_0.9.16.tar.gz
+
+python3 -m pip install carla
+
+cd PythonAPI/carla/dist
+python3 -m pip install carla-0.9.15-cp37m-manylinux_2_27_x86_64.whl
+
+cd PythonAPI/examples
+python3 -m pip install -r requirements.txt
 ```
 
 Khởi động server trên Town10HD_Opt và giữ terminal này mở. Cờ `-RenderOffScreen` vẫn cung cấp hình ảnh cho camera khi chạy ngoài màn hình. [Chế độ render của CARLA](https://carla.readthedocs.io/en/0.9.16/adv_rendering_options/#off-screen-mode)
 
 ```bash
-./CarlaUE4.sh /Game/Carla/Maps/Town10HD_Opt -carla-rpc-port=3000 \
-  -RenderOffScreen -quality-level=Low -nosound
+cd ~/carla-0.9.16
+./CarlaUE4.sh -carla-rpc-port=3000
 ```
 
 <a name="tái-lập-từ-clone-sạch"></a>
@@ -32,7 +45,7 @@ Khởi động server trên Town10HD_Opt và giữ terminal này mở. Cờ `-Re
 ```bash
 git clone https://github.com/khanhhdt/AutoPilot.git
 cd AutoPilot
-python3.11 -m venv .venv
+python -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
 ```

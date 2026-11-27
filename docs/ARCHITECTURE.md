@@ -1,6 +1,6 @@
 # Sơ đồ hệ thống — Lane Detection + Object Avoidance (CARLA)
 
-## 1. Sơ đồ triển khai (deployment)
+## 1. Sơ đồ triển khai
 
 ```
 ╔════════════════════════════════ SERVER (GPU, 5GHz WiFi) ═════════════════════════════════╗
