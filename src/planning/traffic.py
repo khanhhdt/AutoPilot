@@ -1,4 +1,4 @@
-"""Map geometry and simulator-side clearance for Phase 4 lane changes."""
+"""Map geometry and sensor-based clearance for lane changes."""
 
 from dataclasses import dataclass
 from math import cos, radians
@@ -7,8 +7,9 @@ import carla
 import numpy as np
 
 from src.perception.obstacles import Obstacle, ObstacleDetector
+from src.perception.tracking import TrackedObstacle
 from src.planning.decision import Lead
-from src.planning.speed import swept_overlap
+from src.sensors import LidarScan
 
 
 def relative(transform: carla.Transform, point: carla.Location) -> tuple[float, float, float]:
@@ -32,16 +33,19 @@ def lane_key(waypoint: carla.Waypoint) -> tuple[int, int]:
     return waypoint.road_id, waypoint.lane_id
 
 
-def nearest_lead(obstacles: list[Obstacle], waypoint: carla.Waypoint | None,
+def nearest_lead(obstacles: list[TrackedObstacle], waypoint: carla.Waypoint | None,
                  pose: carla.Transform, bumper_m: float) -> Lead | None:
-    for obstacle in obstacles:
+    for track in obstacles:
+        obstacle = track.measurement
         center = ahead(waypoint, max(0., obstacle.forward_m - relative(pose, waypoint.transform.location)[0])) \
             if waypoint else None
         lateral = relative(pose, center.transform.location)[1] if center else 0.
         half_width = min(1.55, (waypoint.lane_width * .44) if waypoint else 1.35)
         if obstacle.left_m <= lateral + half_width and obstacle.right_m >= lateral - half_width:
+            closing = track.closing_mps
+            ttc = max(0., track.forward_m - bumper_m) / closing if closing is not None and closing > .2 else None
             return Lead(obstacle.kind, max(0., obstacle.forward_m - bumper_m),
-                        (obstacle.left_m + obstacle.right_m) / 2 - lateral)
+                        (obstacle.left_m + obstacle.right_m) / 2 - lateral, closing, track.track_id, ttc)
     return None
 
 
@@ -105,42 +109,49 @@ def road_horizon(lane: carla.Waypoint, pose: carla.Transform, road: np.ndarray,
     return visible, curvature
 
 
+def lidar_lane_blocker(lane: carla.Waypoint, scan: LidarScan | None, frame_id: int,
+                       forward_limit: float, rear_limit: float) -> str | None:
+    if scan is None or scan.frame != frame_id:
+        return "lidar_unavailable"
+    points = scan.points[np.isfinite(scan.points).all(axis=1)]
+    if len(points) < 100:
+        return "lidar_unavailable"
+
+    # Transform the measured cloud into the target lane's local frame.
+    transform = np.asarray(lane.transform.get_inverse_matrix()) @ np.asarray(scan.transform.get_matrix())
+    x, y, z = (points @ transform[:3, :3].T + transform[:3, 3]).T
+    in_range = (x >= -rear_limit) & (x <= forward_limit)
+    x, y, z = x[in_range], y[in_range], z[in_range]
+
+    # Sample the corridor center and elevation to handle connected road sections.
+    samples = [(0., 0., 0.)]
+    for reverse, limit in ((True, rear_limit), (False, forward_limit)):
+        for distance in range(6, int(limit) + 7, 6):
+            options = lane.previous(distance) if reverse else lane.next(distance)
+            if len(options) != 1 or not same_direction(lane, options[0]):
+                break
+            samples.append(relative(lane.transform, options[0].transform.location))
+    xs, ys, zs = np.asarray(sorted(samples)).T
+    lateral = y - np.interp(x, xs, ys)
+    height = z - np.interp(x, xs, zs)
+    supported = (x >= xs[0] - 1.) & (x <= xs[-1] + 1.)
+    occupied = supported & (abs(lateral) <= lane.lane_width / 2 + .15) & (height >= .30) & (height <= 3.)
+    return "lidar_occupied" if np.count_nonzero(occupied) >= 3 else None
+
+
 def lane_blocker(lane: carla.Waypoint, pose: carla.Transform, ego_speed_kmh: float,
-                 actors: list[carla.Actor], obstacles: list[Obstacle], road: np.ndarray,
-                 detector: ObstacleDetector, *, predict: bool = False) -> str | None:
+                 scan: LidarScan | None, frame_id: int, obstacles: list[Obstacle],
+                 road: np.ndarray, detector: ObstacleDetector) -> str | None:
     if lane.is_junction:
         return "junction"
     forward_limit = max(24., ego_speed_kmh / 3.6 * 4.)
     half_width = lane.lane_width * .5
-
-    # An adjacent lane in the front-camera blind zone cannot be cleared by
-    # pixels alone. Check collision-box overlap ahead, alongside and behind.
-    for actor in actors:
-        forward, lateral, _ = relative(lane.transform, actor.get_location())
-        if abs(lateral) > 12. or not -65. <= forward <= forward_limit + 10.:
-            continue
-        box = getattr(actor, "bounding_box", None)
-        if box is not None:
-            points = [relative(lane.transform, p) for p in box.get_world_vertices(actor.get_transform())]
-            xs, ys, _ = zip(*points)
-        else:
-            xs, ys = (forward - 1., forward + 1.), (lateral - 1., lateral + 1.)
-        velocity = actor.get_velocity()
-        axis = lane.transform.get_forward_vector()
-        along = velocity.x * axis.x + velocity.y * axis.y + velocity.z * axis.z
-        closing = max(0., along - ego_speed_kmh / 3.6)
-        rear_buffer = max(10., 5. + 3. * closing)
-        if min(xs) <= forward_limit and max(xs) >= -rear_buffer and min(ys) <= half_width and max(ys) >= -half_width:
-            return "actor"
-        if predict:
-            right = lane.transform.get_right_vector()
-            across = velocity.x * right.x + velocity.y * right.y + velocity.z * right.z
-            # The ego traverses the target lane at the maneuver speed. Check the
-            # swept actor box in that moving frame, including side entries.
-            ego_along = min(ego_speed_kmh, 10.) / 3.6
-            if swept_overlap(((min(xs), max(xs)), (min(ys), max(ys))), (along - ego_along, across),
-                             ((-8., 12.), (-half_width, half_width)), 4.):
-                return "predicted_actor"
+    # Bound closure over a four-second maneuver with rear traffic at 50 km/h.
+    maneuver_kmh = min(ego_speed_kmh, 10.)
+    rear_limit = 5. + (50. - maneuver_kmh) / 3.6 * 4.
+    blocker = lidar_lane_blocker(lane, scan, frame_id, forward_limit, rear_limit)
+    if blocker:
+        return blocker
 
     probes = []
     for distance in (9., 13., 17., 21.):

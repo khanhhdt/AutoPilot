@@ -5,6 +5,16 @@ from dataclasses import dataclass
 import carla
 import numpy as np
 
+LIDAR_HEIGHT_M = 2.
+
+
+@dataclass(frozen=True)
+class LidarScan:
+    frame: int
+    transform: carla.Transform
+    points: np.ndarray
+
+
 @dataclass
 class SensorFrame:
     rgb: np.ndarray
@@ -16,6 +26,7 @@ class SensorFrame:
     lane_invasions: int
     frame: int
     timestamp: float
+    lidar: LidarScan | None = None
 
 
 def _decode_rgb(image: carla.Image) -> np.ndarray:
@@ -31,16 +42,22 @@ def _decode_depth(image: carla.Image) -> np.ndarray:
 
 
 class SensorManager:
-    """Owns RGB + semantic segmentation + depth cameras and event sensors.
+    """Owns cameras, event sensors and the optional avoidance LiDAR.
     Assembles exactly one SensorFrame per world.tick() using the shared frame id.
     """
 
-    def __init__(self, world: carla.World, vehicle: carla.Actor, cfg) -> None:
+    def __init__(self, world: carla.World, vehicle: carla.Actor, cfg, *, lidar: bool = False) -> None:
         self._world = world
         self._vehicle = vehicle
         self._cfg = cfg
         self._lock = threading.Lock()
         self._ids = {"rgb": -1, "seg": -1, "depth": -1}
+        if lidar:
+            self._ids["lidar"] = -1
+            box = vehicle.bounding_box
+            self._lidar_self_center = np.array([box.location.x, box.location.y, box.location.z - LIDAR_HEIGHT_M])
+            self._lidar_self_extent = np.array([box.extent.x, box.extent.y, box.extent.z]) + .08
+        self._lidar = None
         self._rgb = None
         self._timestamp = 0.0
         self._seg = None
@@ -82,6 +99,19 @@ class SensorManager:
         self._actors.append(collision)
         lane_invasion = self._world.spawn_actor(lane_invasion_bp, carla.Transform(), attach_to=self._vehicle)
         self._actors.append(lane_invasion)
+        if "lidar" in self._ids:
+            blueprint = blueprint_library.find("sensor.lidar.ray_cast")
+            for name, value in {
+                "role_name": "ego_project_lidar", "channels": 32, "range": 80, "horizontal_fov": 360,
+                "upper_fov": 5, "lower_fov": -24, "points_per_second": 320000,
+                "rotation_frequency": 1. / self._cfg.fixed_delta, "sensor_tick": 0,
+                "dropoff_general_rate": 0,
+            }.items():
+                blueprint.set_attribute(name, str(value))
+            lidar = self._world.spawn_actor(blueprint, carla.Transform(carla.Location(z=LIDAR_HEIGHT_M)),
+                                             attach_to=self._vehicle)
+            self._actors.append(lidar)
+            lidar.listen(self._on_lidar)
 
         rgb_cam.listen(self._on_rgb)
         seg_cam.listen(self._on_seg)
@@ -117,6 +147,14 @@ class SensorManager:
         with self._lock:
             self._collisions += 1
 
+    def _on_lidar(self, measurement: carla.LidarMeasurement) -> None:
+        points = np.frombuffer(measurement.raw_data, dtype=np.float32).reshape(-1, 4)[:, :3]
+        points = points[(abs(points - self._lidar_self_center) > self._lidar_self_extent).any(axis=1)]
+        scan = LidarScan(measurement.frame, measurement.transform, points)
+        with self._lock:
+            self._lidar = scan
+            self._ids["lidar"] = scan.frame
+
     def _on_lane_invasion(self, _event) -> None:
         with self._lock:
             self._lane_invasions += 1
@@ -141,6 +179,7 @@ class SensorManager:
                         lane_invasions=self._lane_invasions,
                         frame=target_frame,
                         timestamp=self._timestamp,
+                        lidar=self._lidar,
                     )
             time.sleep(0.001)
         return None

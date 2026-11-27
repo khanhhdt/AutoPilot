@@ -29,9 +29,11 @@ def checks(report: dict, name: str) -> dict[str, bool]:
         "collision_free": report["collisions"] == 0,
         "started_only_when_clear": phase["unsafe_starts"] == 0,
     }
-    if name == "clear-road":
+    if name in ("clear-road", "curve-road"):
         result["completed_route_segment"] = report["stop_reason"] == "sim_duration" and report["distance_m"] >= 10.
         result["stayed_in_lane"] = report["lane_invasions"] == 0
+        if name == "curve-road":
+            result["lane_coverage"] = report["detector_coverage"] >= .8
     elif scenario is None:
         result["valid_run"] = False
     elif name == "static":
@@ -40,6 +42,9 @@ def checks(report: dict, name: str) -> dict[str, bool]:
     elif name in ("cut-in", "pedestrian"):
         result["actor_crossed"] = scenario["crossed"]
         result["responded"] = scenario["responded"]
+    elif name == "avoid-rear":
+        result["lidar_detected_rear_approach"] = scenario["rear_approach_frames"] >= 5
+        result["held_lane_during_approach"] = scenario["rear_unsafe_starts"] == 0
     else:
         side = "left" if name == "avoid-left" else "right"
         result["completed_expected_change"] = (sum(phase["starts"].values()) == phase["starts"][side]
@@ -54,7 +59,8 @@ def traffic_ids(world: carla.World) -> set[int]:
         ("vehicle.", "sensor.", "walker.", "static.prop."))}
 
 
-def run_trials(planned: tuple, root: Path, host: str, port: int, save_video: bool, *, video_hd: int | None = None) -> dict:
+def run_trials(planned: tuple, root: Path, host: str, port: int, save_video: bool, *,
+               video_hd: int | None = None, weather: str = "clear", lane_input: str = "semantic") -> dict:
     client = carla.Client(host, port)
     client.set_timeout(120.)
     world = client.get_world()
@@ -74,12 +80,13 @@ def run_trials(planned: tuple, root: Path, host: str, port: int, save_video: boo
         client.set_timeout(15.)
         for name, seed in planned:
             print(f"SCENARIO {name} seed={seed}", flush=True)
-            trial = {"name": name, "seed": seed, "passed": False}
+            trial = {"name": name, "seed": seed, "weather": weather, "passed": False}
             trials.append(trial)
-            argv = ["--host", host, "--port", str(port), "--driver", "avoid", "--weather", "clear",
+            argv = ["--host", host, "--port", str(port), "--driver", "avoid", "--weather", weather,
+                    "--lane-input", lane_input,
                     "--no-display", "--out", str(root / f"{name}_{seed}")]
-            if name == "clear-road":
-                argv.extend(["--spawn-index", "22", "--sim-duration", "8"])
+            if name in ("clear-road", "curve-road"):
+                argv.extend(["--spawn-index", "9" if name == "curve-road" else "22", "--sim-duration", "8"])
             else:
                 argv.extend(["--scenario", name, "--scenario-seed", str(seed)])
             if save_video:
@@ -119,7 +126,7 @@ def run_trials(planned: tuple, root: Path, host: str, port: int, save_video: boo
                 restore_error = str(exc)
         passed = len(trials) == len(planned) and all(trial["passed"] for trial in trials) and restore_error is None
         summary = {
-            "host": host, "port": port,
+            "host": host, "port": port, "weather": weather, "lane_input": lane_input,
             "trials_planned": len(planned), "trials_attempted": len(trials),
             "trials_completed": sum("report" in trial for trial in trials),
             "static_stops": sum(bool(trial.get("checks", {}).get("stopped_before_obstacle")) for trial in trials),
@@ -146,13 +153,16 @@ def main() -> int:
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--out", type=Path, default=Path("output/phase4"))
     parser.add_argument("--save-video", action="store_true")
+    parser.add_argument("--weather", choices=("clear", "rain"), default="clear")
+    parser.add_argument("--lane-input", choices=("semantic", "rgb"), default="semantic")
     args = parser.parse_args()
     if args.seed < 0:
         parser.error("--seed must be nonnegative")
     root = args.out / datetime.now().strftime("run_%Y%m%d_%H%M%S_%f")
     planned = SUITE if args.suite else ((args.scenario, args.seed),)
     try:
-        summary = run_trials(planned, root, args.host, args.port, args.save_video)
+        summary = run_trials(planned, root, args.host, args.port, args.save_video,
+                             weather=args.weather, lane_input=args.lane_input)
     except RuntimeError as exc:
         parser.error(str(exc))
     return 0 if summary["verdict"] == "PASS" else 1

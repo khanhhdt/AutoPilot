@@ -66,7 +66,7 @@ def write_report(root: Path, summary: dict, planned: tuple) -> str:
         *(render(row) for row in rows),
         render(dict(totals, name="Tổng", status=summary["verdict"])),
         "",
-        "TTC ước tính từ mức giảm khoảng cách đến vật cản phía trước qua 5 tick. "
+        "TTC dọc dùng khoảng cách và vận tốc khép từ tracker. "
         "N/A nghĩa là thiếu mẫu hợp lệ hoặc xe không tiến gần vật cản. "
         "Chạm vạch là sự kiện thô từ CARLA, gồm cả thao tác chuyển làn chủ động.",
         "",
@@ -81,7 +81,10 @@ def main() -> int:
     parser.add_argument("--host", default="localhost")
     parser.add_argument("--port", type=int, default=3000)
     parser.add_argument("--out", type=Path, default=Path("output/phase5"))
-    parser.add_argument("--case", choices=CASES, help="run a single case for a quick verification")
+    parser.add_argument("--case", choices=(*CASES, "curve-road", "avoid-rear"),
+                        help="run a single case for a quick verification")
+    parser.add_argument("--weather", choices=("clear", "rain"), default="clear")
+    parser.add_argument("--lane-input", choices=("semantic", "rgb"), default="semantic")
     parser.add_argument("--save-video", action="store_true")
     parser.add_argument("--video-hd", nargs="?", const=1024, type=int, choices=(1024, 1920),
                         help="save RGB and overlay only at this native RGB width (default 1024)")
@@ -90,7 +93,7 @@ def main() -> int:
     planned = tuple((name, 0) for name in (CASES if args.case is None else (args.case,)))
     try:
         summary = run_trials(planned, root, args.host, args.port, args.save_video or args.video_hd is not None,
-                             video_hd=args.video_hd)
+                             video_hd=args.video_hd, weather=args.weather, lane_input=args.lane_input)
     except RuntimeError as exc:
         parser.error(str(exc))
     print(write_report(root, summary, planned))

@@ -7,8 +7,8 @@ import carla
 from src.planning.traffic import ahead, lane_key, relative
 
 
-NAMES = ("static", "cut-in", "pedestrian", "avoid", "avoid-left")
-SPAWNS = dict.fromkeys(NAMES, 151) | {"avoid": 22, "avoid-left": 152}
+NAMES = ("static", "cut-in", "pedestrian", "avoid", "avoid-left", "avoid-rear")
+SPAWNS = dict.fromkeys(NAMES, 151) | {"avoid": 22, "avoid-left": 152, "avoid-rear": 22}
 
 
 class Scenario:
@@ -21,7 +21,9 @@ class Scenario:
         self.origin = self.map.get_waypoint(ego.get_location())
         self.actors = []
         self.actor = None
-        self.traffic_manager = None
+        self.rear_actor = None
+        self.rear_approach_frames = 0
+        self.rear_unsafe_starts = 0
         self.triggered = False
         self.crossed = False
         self.approached = False
@@ -30,11 +32,10 @@ class Scenario:
         self.passed = False
         self.left_corridor = False
         self.keep_going = True
-        self.next_cut_in_request_s = 0.
         self.min_gap_m = None
         self.front_m = ego.bounding_box.location.x + ego.bounding_box.extent.x
 
-    def setup(self, client: carla.Client) -> None:
+    def setup(self, _client: carla.Client) -> None:
         rng = random.Random(self.seed)
         right = self.name != "avoid-left"
         adjacent = self.origin.get_right_lane() if right else self.origin.get_left_lane()
@@ -50,15 +51,9 @@ class Scenario:
             self.walk_direction = carla.Vector3D(-side.x, -side.y, 0.)
             self.triggered = False
         elif self.name == "cut-in":
-            self.actor = self._park(adjacent, rng.uniform(14.5, 16.5))
-            self.cut_in_lane = lane_key(adjacent)
-            self.traffic_manager = client.get_trafficmanager()
-            tm = self.traffic_manager
-            tm.set_synchronous_mode(True)
-            tm.set_random_device_seed(self.seed)
-            self.actor.set_autopilot(True, tm.get_port())
-            tm.auto_lane_change(self.actor, False)
-            tm.set_desired_speed(self.actor, 5.)
+            merge_distance = rng.uniform(14.5, 16.5)
+            self.actor = self._park(adjacent, merge_distance)
+            self.merge_point = self._point(self.origin, merge_distance)
         elif self.name == "static":
             barrier = self.world.get_blueprint_library().find("static.prop.streetbarrier")
             transform = self._point(self.origin, distance)
@@ -68,6 +63,10 @@ class Scenario:
         else:
             self.actor = self._park(self.origin, distance)
             self.target_lane = lane_key(adjacent)
+            if self.name == "avoid-rear":
+                self.rear_actor = self._park(adjacent, -18.)
+                self.rear_direction = adjacent.transform.get_forward_vector()
+                self.rear_actor.apply_control(carla.VehicleControl())
 
     def _point(self, lane: carla.Waypoint, distance: float) -> carla.Transform:
         if distance < 0.:
@@ -104,24 +103,28 @@ class Scenario:
         rear_m = obstacle_extent.extent.x if obstacle_extent else .65
         gap = forward - rear_m - self.front_m
         row["scenario_gap_m"] = gap
+        axis = pose.get_forward_vector()
+        delta_velocity = self.ego.get_velocity() - self.actor.get_velocity()
+        row["scenario_closing_mps"] = sum(getattr(axis, dim) * getattr(delta_velocity, dim) for dim in ("x", "y", "z"))
         if gap >= 0.:
             self.min_gap_m = gap if self.min_gap_m is None else min(self.min_gap_m, gap)
         self.approached |= traveled >= 4.
 
         if self.name == "cut-in":
-            lane = self.map.get_waypoint(position)
-            actor_lane = lane_key(lane) if lane else None
-            self.crossed |= self.triggered and actor_lane == lane_key(self.origin)
-            # TM can discard a force request while initializing its lane buffer.
-            # Retry in the starting lane only, and let any ongoing merge finish.
-            if (not self.crossed and actor_lane == self.cut_in_lane and traveled >= 1.
-                    and lateral >= self.origin.lane_width * .85
-                    and row["sim_elapsed_s"] >= self.next_cut_in_request_s):
-                self.traffic_manager.force_lane_change(self.actor, False)
+            if not self.triggered and traveled >= 1.:
+                self.actor.apply_control(carla.VehicleControl())
                 self.triggered = True
-                self.next_cut_in_request_s = row["sim_elapsed_s"] + 1.
-            self.responded |= self.triggered and row["phase4_lead_kind"] == "vehicle" and row["phase4_state"] in (
-                "FOLLOW", "STOP", "AVOID_L", "AVOID_R")
+            if self.triggered:
+                _, cross_track, _ = relative(self.merge_point, position)
+                cross_speed = max(-1.6, min(1.6, -1.5 * cross_track))
+                along = self.merge_point.get_forward_vector()
+                across = self.merge_point.get_right_vector()
+                self.actor.set_target_velocity(along * (5. / 3.6) + across * cross_speed)
+                self.crossed |= abs(cross_track) < .65
+                detected_gap = row.get("phase4_gap_m")
+                self.responded |= (row["phase4_lead_kind"] == "vehicle" and detected_gap is not None
+                                   and abs(detected_gap - gap) < 2.
+                                   and row["phase4_state"] in ("FOLLOW", "STOP", "AVOID_L", "AVOID_R"))
         elif self.name == "pedestrian":
             if not self.triggered and row["sim_elapsed_s"] >= 1.:
                 self.actor.apply_control(carla.WalkerControl(direction=self.walk_direction, speed=1.25))
@@ -131,6 +134,14 @@ class Scenario:
                 self.keep_going = False
             self.crossed |= self.triggered and lateral < -.8
             self.responded |= self.triggered and row["phase4_lead_kind"] == "pedestrian" and row["phase4_state"] == "STOP"
+        elif self.name == "avoid-rear":
+            rear_x, rear_y, _ = relative(pose, self.rear_actor.get_location())
+            row["scenario_rear_m"] = rear_x
+            if -39. < rear_x < -3. and rear_y > 1.5 and self.rear_actor.get_velocity().length() > 4.:
+                self.rear_approach_frames += int(row.get("phase4_right_blocker") == "lidar_occupied")
+            if -39. < rear_x < 24. and rear_y > 1.5:
+                self.rear_unsafe_starts += int(bool(row.get("phase4_change_started")))
+            self.rear_actor.set_target_velocity(self.rear_direction * 6.5)
         elif self.name == "static":
             stopped = (self.approached and .5 < gap <= 9. and row["phase4_state"] == "STOP"
                        and row["phase4_lead_kind"] == "prop"
@@ -152,23 +163,14 @@ class Scenario:
                 "approached": self.approached, "responded": self.responded,
                 "stopped_before_obstacle": self.stopped_frames >= 20,
                 "passed_obstacle": self.passed, "left_corridor": self.left_corridor,
-                "min_positive_gap_m": self.min_gap_m}
+                "min_positive_gap_m": self.min_gap_m, "rear_approach_frames": self.rear_approach_frames,
+                "rear_unsafe_starts": self.rear_unsafe_starts}
 
     def close(self) -> None:
         errors = []
-        if self.traffic_manager and self.actor and self.actor.is_alive:
-            try:
-                self.actor.set_autopilot(False, self.traffic_manager.get_port())
-            except RuntimeError as exc:
-                errors.append(str(exc))
         for actor in reversed(self.actors):
             try:
                 actor.destroy()
-            except RuntimeError as exc:
-                errors.append(str(exc))
-        if self.traffic_manager:
-            try:
-                self.traffic_manager.set_synchronous_mode(False)
             except RuntimeError as exc:
                 errors.append(str(exc))
         if errors:

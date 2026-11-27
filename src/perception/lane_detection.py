@@ -78,6 +78,24 @@ def lane_mask(
     return full
 
 
+def contrast_lane_mask(bgr: np.ndarray, roi_top: float) -> np.ndarray:
+    """Find narrow bright markings that the global color thresholds miss."""
+    height, width = bgr.shape[:2]
+    y0 = int(height * roi_top)
+    hue, light, saturation = cv2.split(cv2.cvtColor(bgr[y0:], cv2.COLOR_BGR2HLS))
+    smoothed = cv2.GaussianBlur(light, (3, 3), 0)
+    background = light[(height - y0) // 3:, width // 3:2 * width // 3]
+    minimum_light = np.clip(np.median(background) + 10., 80., 120.)
+    kernel_width = max(3, round(width * 19 / 512) | 1)
+    ridge = cv2.morphologyEx(smoothed, cv2.MORPH_TOPHAT, np.ones((1, kernel_width), np.uint8))
+    white = (ridge > 13) & (smoothed > minimum_light) & (saturation < 42)
+    yellow = (hue >= 17) & (hue <= 36) & (saturation > 60) & (light > 105)
+    mask = (white | yellow).astype(np.uint8) * 255
+    full = np.zeros((height, width), np.uint8)
+    full[y0:] = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, np.ones((3, 3), np.uint8))
+    return full
+
+
 def _ipm_matrices(width: int, height: int) -> tuple[np.ndarray, np.ndarray]:
     source = np.float32([
         [width * 0.08, height - 1],
@@ -358,14 +376,17 @@ class LaneDetector:
             self._margin if self._margin is not None
             else max(1, round(width * 50 / 512))
         )
-        modes = (
-            ("road", self._edge_dilate),
-            ("color", self._edge_dilate),
-        ) if self._hybrid else (("road", self._edge_dilate),)
+        if road_mask is None:
+            modes = ("color", "contrast")
+        else:
+            modes = ("road", "color") if self._hybrid else ("road",)
         candidates: list[tuple[np.ndarray, np.ndarray, np.ndarray, float, float]] = []
         fallback_mask = None
-        for edge_mode, edge_dilate in modes:
-            mask = lane_mask(bgr, self._roi_top, road_mask, edge_mode, edge_dilate)
+        for edge_mode in modes:
+            if edge_mode == "contrast" and candidates:
+                break
+            mask = (contrast_lane_mask(bgr, self._roi_top) if edge_mode == "contrast"
+                    else lane_mask(bgr, self._roi_top, road_mask, edge_mode, self._edge_dilate))
             if fallback_mask is None:
                 fallback_mask = mask
             bird_mask = cv2.warpPerspective(

@@ -3,7 +3,7 @@ from dataclasses import dataclass
 
 @dataclass(frozen=True)
 class Config:
-    host: str = os.environ.get("CARLA_HOST", "100.85.59.63")
+    host: str = os.environ.get("CARLA_HOST", "127.0.0.1")
     port: int = int(os.environ.get("CARLA_PORT", "3000"))
     timeout: float = 30.0
 

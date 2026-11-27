@@ -151,7 +151,7 @@ về benchmark, audit và cách ghi bộ dữ liệu kiểm tra tiếp theo.
 ```
 configs/config.py       host/port, sync mode, resolution
 src/main.py             vòng lặp sensor + lane detector live, đo ngân sách 50 ms/tick
-src/sensors.py          RGB + semantic seg + depth + collision/lane invasion
+src/sensors.py          RGB + semantic + depth + sự kiện, LiDAR trong chế độ avoid
 src/vehicle.py          spawn ego, apply_control
 src/perception/         lane_detection.py (Phase 2), segmentation, obstacles
 scripts/                record_dataset.py, eval_lane.py
@@ -207,8 +207,8 @@ chiếm làn. FSM ghi `CRUISE`, `FOLLOW`, `AVOID_L`, `AVOID_R` hoặc `STOP`
 vào `frames.csv` kèm khoảng cách, trạng thái làn kề và thời điểm chuyển làn.
 
 Xe chỉ bắt đầu tránh khi đoạn làn kề cùng chiều cho phép chuyển làn, vùng ảnh
-semantic cho thấy mặt đường trống và bounding box của các actor mô phỏng không
-chiếm vùng trước, bên hông hoặc sau. Đây là kiểm tra điểm mù dựa trên API CARLA.
+semantic cho thấy mặt đường trống và LiDAR cùng tick xác nhận vùng làn đích
+trước, bên hông và phía sau không có vật cản.
 Waypoint làn đích cấp điểm nhìn cho pure pursuit trong lúc chuyển làn, sau đó
 xe tiếp tục giữ làn từ ảnh. Gặp người đi bộ, mất ảnh đồng bộ hoặc làn đích bị
 chặn giữa thao tác thì bộ điều khiển phanh.
@@ -222,17 +222,18 @@ Khi `--driver avoid` nhận mục tiêu trên 20 km/h, chế độ thích ứng 
 semantic/depth lên 384×216 và dùng bộ lọc vật cản tới 65 m. Tốc độ chạy bị giới
 hạn bởi độ cong, vùng mặt đường quan sát được và mức tối đa 40 km/h. Khoảng
 chuẩn bị vượt thay đổi theo tốc độ thực và tốc độ khép khoảng cách. Bộ điều
-khiển giữ ngưỡng 15 km/h khi bắt đầu vượt và kiểm tra vùng làn đích qua cửa
-sổ dự đoán 4 giây từ hộp bao và vận tốc actor CARLA.
+khiển giữ ngưỡng 15 km/h khi bắt đầu vượt. Khoảng trống phía sau được tính theo
+dự phòng khép khoảng cách trong 4 giây, với xe làn đích ở 50 km/h.
 
 Khi mất vạch ngắn, xe chỉ dùng tham chiếu bản đồ cùng làn nếu vị trí, hướng
 và vùng quan sát còn phù hợp. Mục tiêu trong chế độ dự phòng tối đa 10 km/h.
 Mất vạch kéo dài hoặc mất frame đồng bộ sẽ yêu cầu phanh. Log từng tick
 có `visibility_m`, `speed_limit_kmh`, `closing_mps`, nguồn tham chiếu và gia tốc ngang.
-Xem [kiểm chứng tốc độ thích ứng](docs/adaptive_speed.md) cho ma trận 20–40 km/h.
+`--lane-input rgb` bật nhận diện làn thuần RGB. Kết quả A/B, kiểm chứng LiDAR,
+TTC và lệnh chạy suite mưa nằm trong [báo cáo PoC](docs/IMPROVEMENT.md).
 
 Suite chạy tuần tự trên world rảnh ở chế độ async. Có 10 lần dừng trước rào
-chắn với làn kế bên có xe, 4 lần xe Traffic Manager cắt vào, 3 lần người đi bộ
+chắn với làn kế bên có xe, 4 lần xe cắt vào theo quỹ đạo thử nghiệm, 3 lần người đi bộ
 băng qua và 3 lần đổi làn để vượt xe đỗ. `summary.json` trong `output/phase4/`
 lưu kết quả từng lượt, số lần dừng và số lần bắt đầu chuyển làn khi vùng kề
 không trống. Phạm vi nghiệm thu là các kịch bản mô phỏng ở 10 km/h, trời quang.

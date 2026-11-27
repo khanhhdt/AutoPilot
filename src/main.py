@@ -41,6 +41,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--speed-kd", type=float, default=.01)
     parser.add_argument("--spawn-index", type=int, default=None)
     parser.add_argument("--weather", choices=("clear", "rain"), default=None)
+    parser.add_argument("--lane-input", choices=("semantic", "rgb"), default="semantic",
+                        help="use RGB with a simulator road mask or RGB alone for lane detection")
     parser.add_argument("--out", type=Path, default=Path("output/live"), help="parent directory for a new run")
     parser.add_argument("--save-video", action="store_true", help="save the live RGB/semantic/lane view")
     parser.add_argument("--video-hd", nargs="?", const=1024, type=int, choices=(1024, 1920),
@@ -157,7 +159,7 @@ def main(argv: list[str] | None = None) -> Path:
             world.tick()
             scenario = Scenario(args.scenario, args.scenario_seed, world, ego.actor)
             scenario.setup(client)
-        sensors = SensorManager(world, ego.actor, sensor_cfg)
+        sensors = SensorManager(world, ego.actor, sensor_cfg, lidar=args.driver == "avoid")
         if args.driver == "tm":
             traffic_manager = client.get_trafficmanager()
             traffic_manager.set_synchronous_mode(True)
@@ -186,7 +188,7 @@ def main(argv: list[str] | None = None) -> Path:
                     if sensors.wait_for_frame(world.tick()) is not None:
                         break
                 else:
-                    raise RuntimeError("Phase 4 cameras did not initialize")
+                    raise RuntimeError("avoidance cameras and LiDAR did not initialize")
         print(f"ego {ego.actor.type_id} | driver {args.driver} | target {1.0 / CFG.fixed_delta:.0f} Hz | "
               f"rgb {sensor_cfg.rgb_width}x{sensor_cfg.rgb_height} | "
               f"aux {sensor_cfg.aux_width}x{sensor_cfg.aux_height} | output {output}", flush=True)
@@ -229,7 +231,7 @@ def main(argv: list[str] | None = None) -> Path:
             stop_requested = False
 
             if frame is None:
-                row.update(telemetry.update(row["sim_elapsed_s"], None))
+                row.update(telemetry.update(None))
                 detector.reset()
                 if avoidance:
                     avoidance.sensor_lost()
@@ -243,11 +245,13 @@ def main(argv: list[str] | None = None) -> Path:
                 frames += 1
                 window_frames += 1
                 preprocess_start = time.perf_counter()
-                road = ((frame.seg_tags == ROAD_TAG) | (frame.seg_tags == ROAD_LINE_TAG)).astype(np.uint8) * 255
                 tracking_rgb = (cv2.resize(frame.rgb, (CFG.rgb_width, CFG.rgb_height), interpolation=cv2.INTER_AREA)
                                 if args.video_hd else frame.rgb)
-                road = cv2.resize(road, (tracking_rgb.shape[1], tracking_rgb.shape[0]), interpolation=cv2.INTER_NEAREST)
-                road = cv2.dilate(road, np.ones((5, 5), np.uint8))
+                road = None
+                if args.lane_input == "semantic":
+                    road = ((frame.seg_tags == ROAD_TAG) | (frame.seg_tags == ROAD_LINE_TAG)).astype(np.uint8) * 255
+                    road = cv2.resize(road, (tracking_rgb.shape[1], tracking_rgb.shape[0]), interpolation=cv2.INTER_NEAREST)
+                    road = cv2.dilate(road, np.ones((5, 5), np.uint8))
                 row["preprocess_ms"] = (time.perf_counter() - preprocess_start) * 1000.0
                 perception_start = time.perf_counter()
                 lane = detector.detect(tracking_rgb, road_mask=road)
@@ -261,7 +265,7 @@ def main(argv: list[str] | None = None) -> Path:
                     plan_stop = False
                     target = None
                     if avoidance:
-                        assessment = avoidance.step(frame, world, ego.actor, transform, waypoint,
+                        assessment = avoidance.step(frame, transform, waypoint,
                                                     lane.fresh, lane.detected and not row["frame_gap"],
                                                     speed_target, CFG.fixed_delta)
                         decision = assessment.decision
@@ -275,10 +279,15 @@ def main(argv: list[str] | None = None) -> Path:
                                    phase4_gap_m=assessment.lead.gap_m if assessment.lead else None,
                                    phase4_left_clear=assessment.clear.get("left", False),
                                    phase4_right_clear=assessment.clear.get("right", False),
+                                   phase4_left_blocker=assessment.blockers.get("left"),
+                                   phase4_right_blocker=assessment.blockers.get("right"),
+                                   lidar_frame=frame.lidar.frame if frame.lidar is not None else None,
                                    phase4_change_started=decision.start_side,
                                    phase4_change_completed=assessment.completed,
                                    phase4_target_blocker=assessment.target_blocker,
+                                   lead_track_id=assessment.lead.track_id if assessment.lead else None,
                                    closing_mps=assessment.lead.closing_mps if assessment.lead else None,
+                                   ttc_s=assessment.lead.ttc_s if assessment.lead and not row["frame_gap"] else None,
                                    visibility_m=assessment.visible_m, speed_limit_kmh=assessment.speed_limit_kmh,
                                    lane_reference=assessment.reference)
                         if adaptive_speed:
@@ -328,11 +337,8 @@ def main(argv: list[str] | None = None) -> Path:
                     row.update(lane_error_m=delta.x * right.x + delta.y * right.y,
                                lane_width_m=waypoint.lane_width,
                                heading_error_rad=float(np.deg2rad((yaw_delta + 180.) % 360. - 180.)))
-                lead_kind = row.get("phase4_lead_kind")
-                lead_key = (waypoint.road_id, waypoint.lane_id, lead_kind) if waypoint and lead_kind else None
                 pos = transform.location
-                row.update(telemetry.update(frame.timestamp, (pos.x, pos.y, pos.z), lead_key,
-                                            row.get("phase4_gap_m"), frame_gap=row["frame_gap"]))
+                row.update(telemetry.update((pos.x, pos.y, pos.z), frame_gap=row["frame_gap"]))
                 row.update(sensor_frame=frame.frame, timestamp_sim=frame.timestamp,
                            speed_kmh=frame.speed_kmh, is_junction=bool(waypoint.is_junction) if waypoint else None,
                            collisions=frame.collisions, lane_invasions=frame.lane_invasions,
@@ -424,16 +430,20 @@ def main(argv: list[str] | None = None) -> Path:
         if not args.no_display:
             cv2.destroyAllWindows()
         report = summarize_live_run(rows, elapsed, CFG.fixed_delta)
+        input_mode = "RGB" if args.lane_input == "rgb" else "RGB + simulator road mask"
+        if avoidance:
+            input_mode = "RGB + semantic tags + depth + LiDAR + CARLA lane geometry"
         report.update(schema_version="live-v1", stop_reason=stop_reason, error=failure, cleanup_errors=cleanup_errors,
                       host=args.host, port=args.port, map=carla_map.name, driver=args.driver,
                       target_speed_kmh=args.target_speed, spawn_index=args.spawn_index,
                       weather=args.weather or "unchanged", rgb_size=[sensor_cfg.rgb_width, sensor_cfg.rgb_height],
+                      lane_input=args.lane_input,
                       perception_rgb_size=[CFG.rgb_width, CFG.rgb_height],
                       video_layout=("rgb-overlay" if args.video_hd else "rgb-semantic-overlay") if args.save_video else None,
                       aux_size=[sensor_cfg.aux_width, sensor_cfg.aux_height], adaptive_speed=adaptive_speed,
                       sensor_sync="exact_tick_frame_id",
-                      input_mode=("RGB + semantic tags + depth + CARLA lane and actor geometry"
-                                  if avoidance else "RGB + simulator road mask"),
+                      ttc_source="tracked_longitudinal_gap" if avoidance else None,
+                      input_mode=input_mode,
                       perception_mode="live_in_tick_loop",
                       video_fps_sim=1.0 / CFG.fixed_delta if args.save_video else None,
                       opencv_version=cv2.__version__, opencv_threads=cv2.getNumThreads())

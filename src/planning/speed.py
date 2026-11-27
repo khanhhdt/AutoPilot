@@ -1,8 +1,6 @@
 """Speed bounds and short-horizon prediction for the CARLA planner."""
 
-from collections import deque
 from math import sqrt
-from statistics import median
 
 
 REACTION_S = .6
@@ -39,31 +37,6 @@ def preparation_range(speed_kmh: float, prepare_kmh: float, closing_mps: float |
     braking_time = max(0., speed - target) / COMFORT_BRAKE_MPS2
     braking_distance = max(0., (speed + target) / 2 - front) * braking_time
     return max(30., 24. + REACTION_S * closing + braking_distance)
-
-
-class LeadHistory:
-    """Estimate closing speed for a short, continuously associated detection."""
-
-    def __init__(self) -> None:
-        self.samples = deque(maxlen=7)
-        self.key = None
-
-    def reset(self) -> None:
-        self.samples.clear()
-        self.key = None
-
-    def observe(self, key: tuple, gap_m: float, timestamp: float) -> float | None:
-        if self.key != key or (self.samples and (
-            not 0. < timestamp - self.samples[-1][0] <= .12
-            or abs(gap_m - self.samples[-1][1]) > 2.
-        )):
-            self.reset()
-        self.key = key
-        self.samples.append((timestamp, gap_m))
-        if len(self.samples) < 5:
-            return None
-        samples = list(self.samples)
-        return median((a[1] - b[1]) / (b[0] - a[0]) for a, b in zip(samples, samples[3:]))
 
 
 def swept_overlap(bounds: tuple, velocity: tuple, region: tuple, duration_s: float) -> bool:

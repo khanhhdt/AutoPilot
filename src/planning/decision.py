@@ -25,6 +25,8 @@ class Lead:
     gap_m: float
     center_m: float = 0.
     closing_mps: float | None = None
+    track_id: int | None = None
+    ttc_s: float | None = None
 
 
 @dataclass(frozen=True)

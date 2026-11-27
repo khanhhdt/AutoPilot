@@ -1,7 +1,6 @@
 import csv
 import json
-from collections import deque
-from math import dist, isfinite
+from math import dist
 from pathlib import Path
 
 import numpy as np
@@ -21,41 +20,25 @@ LIVE_FIELDS = (
 PHASE4_FIELDS = (
     "phase4_state", "phase4_target_speed_kmh", "phase4_obstacle_count", "phase4_lead_kind", "phase4_gap_m",
     "phase4_left_clear", "phase4_right_clear", "phase4_change_started", "phase4_change_completed",
-    "phase4_target_blocker", "scenario_gap_m", "closing_mps", "visibility_m", "speed_limit_kmh",
+    "phase4_target_blocker", "phase4_left_blocker", "phase4_right_blocker", "lidar_frame",
+    "scenario_gap_m", "scenario_closing_mps", "scenario_rear_m", "lead_track_id", "closing_mps", "visibility_m",
+    "speed_limit_kmh",
     "lane_reference", "lateral_accel_mps2",
 )
 
 
 class RunTelemetry:
-    """Odometry from consecutive poses and TTC from a short lead-range history."""
+    """Accumulate odometry from consecutive, synchronized poses."""
 
     def __init__(self) -> None:
         self.distance_m = 0.
         self.position = None
-        self.lead_key = None
-        self.ranges = deque(maxlen=5)
 
-    def update(self, timestamp: float, position: tuple[float, float, float] | None,
-               lead_key: tuple | None = None, gap_m: float | None = None,
-               *, frame_gap: bool = False) -> dict:
+    def update(self, position: tuple[float, float, float] | None, *, frame_gap: bool = False) -> dict:
         if position is not None and self.position is not None and not frame_gap:
             self.distance_m += dist(self.position, position)
         self.position = position
-        valid_lead = position is not None and lead_key is not None and gap_m is not None and isfinite(gap_m)
-        if (not valid_lead or frame_gap or lead_key != self.lead_key or
-                self.ranges and (timestamp <= self.ranges[-1][0] or
-                                 abs(gap_m - self.ranges[-1][1]) > 30. * (timestamp - self.ranges[-1][0]))):
-            self.ranges.clear()
-        self.lead_key = lead_key if valid_lead else None
-        ttc_s = None
-        if valid_lead:
-            self.ranges.append((timestamp, gap_m))
-            if len(self.ranges) == self.ranges.maxlen:
-                first_t, first_gap = self.ranges[0]
-                closing = (first_gap - gap_m) / (timestamp - first_t)
-                if closing > .2:
-                    ttc_s = gap_m / closing
-        return {"distance_m": self.distance_m, "ttc_s": ttc_s}
+        return {"distance_m": self.distance_m}
 
 
 def summarize_live_run(rows: list[dict], elapsed_s: float, fixed_delta: float) -> dict:

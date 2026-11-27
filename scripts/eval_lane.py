@@ -62,6 +62,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--save-video", action="store_true")
     parser.add_argument("--verbose", action="store_true")
     parser.add_argument("--report", type=Path, help="write versioned JSON metrics")
+    parser.add_argument("--lane-input", choices=("semantic", "rgb"), default="semantic",
+                        help="use semantic tags only for scoring when set to rgb")
     parser.add_argument("--audit-dir", type=Path,
                         help="write per-frame CSV and sampled failed/GT-excluded overlays")
     parser.add_argument("--opencv-threads", type=int, default=1,
@@ -193,9 +195,11 @@ def evaluate_session(session: str, args: argparse.Namespace) -> dict:
             raise ValueError(f"sensor dimensions disagree with metadata: {rgb_path}")
         frame_count += 1
 
-        road = ((tags == ROAD_TAG) | (tags == ROAD_LINE_TAG)).astype(np.uint8) * 255
-        road = cv2.resize(road, (rgb_w, rgb_h), interpolation=cv2.INTER_NEAREST)
-        road = cv2.dilate(road, np.ones((5, 5), np.uint8))
+        road = None
+        if args.lane_input == "semantic":
+            road = ((tags == ROAD_TAG) | (tags == ROAD_LINE_TAG)).astype(np.uint8) * 255
+            road = cv2.resize(road, (rgb_w, rgb_h), interpolation=cv2.INTER_NEAREST)
+            road = cv2.dilate(road, np.ones((5, 5), np.uint8))
         detect_start = time.perf_counter()
         state = detector.detect(bgr, road_mask=road)
         detector_ms.append((time.perf_counter() - detect_start) * 1000.0)
@@ -601,8 +605,9 @@ def main() -> None:
             "threshold_ref_px": 15,
             "minimum_session_score": 0.8,
             "min_valid_frames": args.min_valid_frames,
-            "input_mode": "RGB + simulator road mask",
+            "input_mode": "RGB" if args.lane_input == "rgb" else "RGB + simulator road mask",
             "detector_source_sha256": hashlib.sha256(Path(inspect.getfile(LaneDetector)).read_bytes()).hexdigest(),
+            "lane_input": args.lane_input,
             "opencv_version": cv2.__version__,
             "opencv_threads": cv2.getNumThreads(),
             "settings": {key: str(value) if isinstance(value, Path) else value
