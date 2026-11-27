@@ -9,6 +9,7 @@ import numpy as np
 from src.perception.obstacles import Obstacle, ObstacleDetector
 from src.perception.tracking import TrackedObstacle
 from src.planning.decision import Lead
+from src.planning.speed import MAX_CRUISE_KMH, curve_approach_speed_kmh
 from src.sensors import LidarScan
 
 
@@ -89,15 +90,17 @@ def adjacent_lanes(origin: carla.Waypoint) -> dict[str, carla.Waypoint]:
 
 def road_horizon(lane: carla.Waypoint, pose: carla.Transform, road: np.ndarray,
                  detector: ObstacleDetector) -> tuple[float, float]:
-    """Verified road probes and maximum map curvature over the lookahead."""
-    visible = curvature = 0.
-    previous, previous_distance = lane, 0.
-    for distance in (9., 16., 24., 32., 40., 48., 56.):
+    """Return visible distance and speed available before upcoming bends."""
+    visible, curve_limit = 0., MAX_CRUISE_KMH
+    previous = lane
+    step_m = 4
+    for distance in range(step_m, 57, step_m):
         point = ahead(lane, distance)
         if point is None or point.is_junction:
             break
         turn = (point.transform.rotation.yaw - previous.transform.rotation.yaw + 180.) % 360. - 180.
-        curvature = max(curvature, abs(radians(turn)) / (distance - previous_distance))
+        curvature = abs(radians(turn)) / step_m
+        curve_limit = min(curve_limit, curve_approach_speed_kmh(curvature, distance - step_m))
         right = point.transform.get_right_vector()
         offset = min(1.15, point.lane_width * .33)
         probes = [relative(pose, point.transform.location + carla.Location(
@@ -105,8 +108,8 @@ def road_horizon(lane: carla.Waypoint, pose: carla.Transform, road: np.ndarray,
             for lateral in (-offset, 0., offset)]
         if detector.road_visible(road, probes):
             visible = distance
-        previous, previous_distance = point, distance
-    return visible, curvature
+        previous = point
+    return visible, curve_limit
 
 
 def lidar_lane_blocker(lane: carla.Waypoint, scan: LidarScan | None, frame_id: int,

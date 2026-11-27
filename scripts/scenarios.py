@@ -1,6 +1,7 @@
 """Run one CARLA obstacle scenario or the 20-run Phase 4 acceptance suite."""
 
 import argparse
+import csv
 import json
 from datetime import datetime
 from pathlib import Path
@@ -17,9 +18,30 @@ SUITE = (
     *(("pedestrian", seed) for seed in range(3)),
     ("avoid", 0), ("avoid", 1), ("avoid-left", 0),
 )
+CLEAR_ROAD_TARGET_KMH = 50.
+CLEAR_ROAD_TOLERANCE_KMH = 1.5
+CLEAR_ROAD_HOLD_S = 1.
 
 
-def checks(report: dict, name: str) -> dict[str, bool]:
+def measure_clear_road(frames_path: Path, fixed_delta_s: float) -> dict:
+    peak, streak, longest = 0., 0, 0
+    with frames_path.open(newline="", encoding="utf-8") as handle:
+        for row in csv.DictReader(handle):
+            measured_kmh = float(row["speed_kmh"] or 0.)
+            peak = max(peak, measured_kmh)
+            within_target = abs(measured_kmh - CLEAR_ROAD_TARGET_KMH) <= CLEAR_ROAD_TOLERANCE_KMH
+            cruising = (row["phase4_state"] == "CRUISE" and row["phase4_lead_kind"] == ""
+                        and row["lane_reference"] == "camera" and row["control_valid"] == "True"
+                        and row["is_junction"] == "False"
+                        and float(row["phase4_target_speed_kmh"] or 0.) == CLEAR_ROAD_TARGET_KMH)
+            streak = streak + 1 if cruising and within_target else 0
+            longest = max(longest, streak)
+    return {"target_kmh": CLEAR_ROAD_TARGET_KMH, "peak_kmh": peak,
+            "tolerance_kmh": CLEAR_ROAD_TOLERANCE_KMH, "required_s": CLEAR_ROAD_HOLD_S,
+            "longest_s": longest * fixed_delta_s}
+
+
+def checks(report: dict, name: str, clear_road: dict | None = None) -> dict[str, bool]:
     phase = report["phase4"]
     scenario = phase["scenario"]
     result = {
@@ -32,7 +54,11 @@ def checks(report: dict, name: str) -> dict[str, bool]:
     if name in ("clear-road", "curve-road"):
         result["completed_route_segment"] = report["stop_reason"] == "sim_duration" and report["distance_m"] >= 10.
         result["stayed_in_lane"] = report["lane_invasions"] == 0
-        if name == "curve-road":
+        if name == "clear-road":
+            result["maintained_50_kmh"] = (report["target_speed_kmh"] == CLEAR_ROAD_TARGET_KMH
+                                           and clear_road is not None
+                                           and clear_road["longest_s"] >= CLEAR_ROAD_HOLD_S)
+        else:
             result["lane_coverage"] = report["detector_coverage"] >= .8
     elif scenario is None:
         result["valid_run"] = False
@@ -85,8 +111,11 @@ def run_trials(planned: tuple, root: Path, host: str, port: int, save_video: boo
             argv = ["--host", host, "--port", str(port), "--driver", "avoid", "--weather", weather,
                     "--lane-input", lane_input,
                     "--no-display", "--out", str(root / f"{name}_{seed}")]
-            if name in ("clear-road", "curve-road"):
-                argv.extend(["--spawn-index", "9" if name == "curve-road" else "22", "--sim-duration", "8"])
+            if name == "clear-road":
+                argv.extend(["--spawn-index", "69", "--sim-duration", "8", "--target-speed", str(CLEAR_ROAD_TARGET_KMH),
+                             "--speed-kp", ".65", "--speed-ki", ".1"])
+            elif name == "curve-road":
+                argv.extend(["--spawn-index", "9", "--sim-duration", "8"])
             else:
                 argv.extend(["--scenario", name, "--scenario-seed", str(seed)])
             if save_video:
@@ -96,7 +125,11 @@ def run_trials(planned: tuple, root: Path, host: str, port: int, save_video: boo
             try:
                 path = drive(argv) / "report.json"
                 report = json.loads(path.read_text())
-                trial.update(report=str(path), checks=checks(report, name), collisions=report["collisions"],
+                if name == "clear-road":
+                    trial["clear_road_speed"] = measure_clear_road(path.with_name("frames.csv"),
+                                                                  report["tick_budget_ms"] / 1000.)
+                trial.update(report=str(path), checks=checks(report, name, trial.get("clear_road_speed")),
+                             collisions=report["collisions"],
                              phase4=report["phase4"], metrics={key: report[key] for key in (
                                  "distance_m", "lane_invasions", "min_ttc_s", "ttc_samples", "frames",
                                  "elapsed_s", "avg_fps_wall")})

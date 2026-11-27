@@ -7,7 +7,7 @@ REACTION_S = .6
 BRAKE_MPS2 = 3.
 COMFORT_BRAKE_MPS2 = 2.5
 STANDSTILL_GAP_M = 4.
-MAX_CRUISE_KMH = 40.
+MAX_CRUISE_KMH = 50.
 LATERAL_ACCEL_LIMIT_MPS2 = 1.5
 
 
@@ -27,6 +27,15 @@ def visible_speed_kmh(distance_m: float) -> float:
 
 def curve_speed_kmh(curvature: float) -> float:
     return min(MAX_CRUISE_KMH, 3.6 * sqrt(LATERAL_ACCEL_LIMIT_MPS2 / curvature)) if curvature > 0. else MAX_CRUISE_KMH
+
+
+def curve_approach_speed_kmh(curvature: float, distance_m: float) -> float:
+    """Limit speed now so braking can reach the curve speed before entry."""
+    corner_kmh = curve_speed_kmh(curvature)
+    reaction = BRAKE_MPS2 * REACTION_S
+    approach_mps = sqrt(reaction ** 2 + (corner_kmh / 3.6) ** 2
+                        + 2 * BRAKE_MPS2 * max(0., distance_m)) - reaction
+    return min(MAX_CRUISE_KMH, max(corner_kmh, approach_mps * 3.6))
 
 
 def preparation_range(speed_kmh: float, prepare_kmh: float, closing_mps: float | None) -> float:

@@ -10,7 +10,7 @@ from src.perception.tracking import ObstacleTracker
 from src.planning.decision import (
     PASS_ENTRY_SPEED_KMH, PASS_PREPARE_RANGE_M, PASS_PREPARE_SPEED_KMH, Decision, DecisionPlanner, Lead, State,
 )
-from src.planning.speed import curve_speed_kmh, preparation_range, visible_speed_kmh
+from src.planning.speed import preparation_range, visible_speed_kmh
 from src.planning.traffic import LaneChange, adjacent_lanes, ahead, lane_blocker, lane_key, nearest_lead, relative, road_horizon
 
 
@@ -66,9 +66,9 @@ class AvoidanceController:
         reference = "camera"
         if self.adaptive:
             reference_lane = target_lane or waypoint
-            visible, curvature = road_horizon(reference_lane, pose, road, self.detector) if reference_lane else (0., 0.)
+            visible, curve_limit = road_horizon(reference_lane, pose, road, self.detector) if reference_lane else (0., 0.)
             # Reserve a few meters at the edge of the verified road projection.
-            limit = min(curve_speed_kmh(curvature), visible_speed_kmh(max(0., visible - 4.)))
+            limit = min(curve_limit, visible_speed_kmh(max(0., visible - 4.)))
             if waypoint and lane_fresh and lane_valid:
                 self.trusted_lane = lane_key(waypoint)
                 self.last_fresh_s = frame.timestamp

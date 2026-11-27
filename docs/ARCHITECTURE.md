@@ -1,24 +1,15 @@
 # Sơ đồ hệ thống — Lane Detection + Object Avoidance (CARLA)
 
-Tài liệu này ghi thiết kế ban đầu. Xem [sơ đồ triển khai và số đo đã kiểm
-chứng](phase5-6.md) cho phiên bản Phase 5–6 trên localhost.
-
-Dự án: Autonomous Driving (Simulation)
-Tools: CARLA 0.9.16, OpenCV, Python 3.11
-Hạ tầng: CARLA server (GPU, 5GHz WiFi) ↔ client (Ubuntu) qua LAN/Tailscale
-
----
-
 ## 1. Sơ đồ triển khai (deployment)
 
 ```
 ╔════════════════════════════════ SERVER (GPU, 5GHz WiFi) ═════════════════════════════════╗
 ║  CARLA 0.9.16  (Unreal Engine 4)                                                         ║
 ║                                                                                          ║
-║   ┌──────────────┐   ┌──────────────┐   ┌──────────────────┐   ┌────────────────────┐  ║
-║   │ World / Map  │   │ Physics      │   │ Renderer (GPU)   │   │ Traffic + Peds     │  ║
-║   │ Town03       │   │ 20 Hz sim    │   │ ~120 fps no-cam  │   │ autopilot (TM)     │  ║
-║   └──────────────┘   └──────────────┘   └──────────────────┘   └────────────────────┘  ║
+║   ┌──────────────┐   ┌──────────────┐   ┌──────────────────┐   ┌────────────────────┐    ║
+║   │ World / Map  │   │ Physics      │   │ Renderer (GPU)   │   │ Traffic + Peds     │    ║
+║   │ Town03       │   │ 20 Hz sim    │   │ ~120 fps no-cam  │   │ autopilot (TM)     │    ║
+║   └──────────────┘   └──────────────┘   └──────────────────┘   └────────────────────┘    ║
 ║                                                                                          ║
 ║   RPC      :3000  ── spawn xe, tick, apply_control, đọc trạng thái                       ║
 ║   Streaming:3001  ── ảnh sensor (TCP, raw BGRA)                                          ║

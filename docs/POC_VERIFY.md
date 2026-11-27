@@ -1,28 +1,30 @@
-1. Bỏ kiểm tra điểm mù bằng world.get_actors() — thay bằng Radar/LiDAR của CARLA
-
-Vì sao nên làm: Trong src/planning/avoidance.py và src/planning/traffic.py, lane_blocker() đang lấy trực tiếp bounding box và vận tốc của các xe khác từ server (world.get_actors()). Đây là điểm dễ bị bắt bẻ nhất ở PoC vì mang tính "đọc cheat" từ simulator.
-Làm gọn thế nào: Gắn thêm 2 cảm biến sensor.other.radar (hoặc 1 sensor.lidar.ray_cast quét 360°) trong src/sensors.py để kiểm tra vùng trống làn bên trái/phải/sau thay cho world.get_actors().
-
-2. Chứng minh nhận diện làn chạy được thuần RGB (không phụ thuộc semantic mask từ CARLA)
-
-Hiện src/main.py luôn truyền road_mask trích từ seg_tags vào LaneDetector.detect().
-Trong src/perception/lane_detection.py, LaneDetector.detect(bgr, road_mask=None) vốn đã hỗ trợ road_mask=None. Bạn chỉ cần thêm cờ chạy thuần RGB (hoặc 1 model segmentation/lane nhẹ pretrained) và so sánh kết quả với nhánh có seg_tags để chứng minh pipeline vẫn hoạt động không cần nhãn giả lập.
-
-3. Thay LeadHistory bằng bộ lọc/tracker đơn giản để ổn định TTC
-
-Hiện AvoidanceController (src/planning/avoidance.py) gán khóa đối tượng bằng (road_id, lane_id, kind, round(center_m / 1.5)), dễ nhảy đối tượng hoặc nhiễu vận tốc khép khoảng cách closing_mps.
-Chỉ cần một tracker đơn giản (ghép cặp theo khoảng cách gần nhất + Kalman Filter 1D/2D cho khoảng cách và vận tốc tương đối) là giải quyết được hạn chế TTC mà docs/phase5-6.md đã nêu.
-
-4. Tách ghi video/UI ra luồng riêng & bổ sung 1–2 ca thời tiết mưa vào suite
-
-Trong src/main.py, ghi video HD đồng bộ trong vòng lặp chính kéo FPS thực tụt xuống ~9,2 FPS (docs/adaptive_speed.md). Đẩy build_view() + VideoWriter.write() sang thread/queue riêng sẽ giữ được gần 20 FPS khi quay demo.
-Chạy thêm vài kịch bản với --weather rain (hiện scripts/scenarios.py đang cố định --weather clear) để thấy rõ độ bền của perception trong điều kiện không lý tưởng.
-
 ## Kiểm chứng PoC
 
-Các bài chạy sử dụng CARLA 0.9.16 qua `localhost:3000`, đồng bộ ở 20 Hz. Các ca
-Town10HD_Opt dùng tốc độ mục tiêu 10 km/h. Ca TTC mở rộng trên Town05 dùng
-mục tiêu 30 km/h.
+Các bài chạy sử dụng CARLA 0.9.16 qua `localhost:3000`, đồng bộ ở 20 Hz.
+
+### Tốc độ trên đường trống — PASS
+
+Nghiệm thu chạy `clear-road` trên một đoạn thẳng ở Town10HD_Opt với mục tiêu
+**50 km/h**. Ca chỉ đạt khi tốc độ đo được giữ trong dải **50 ± 1,5 km/h**
+liên tục ít nhất **1 giây**, trong trạng thái `CRUISE`, còn giữ làn bằng camera
+và không phát hiện vật cản phía trước. Giới hạn tốc độ vẫn tính theo tầm nhìn
+và khoảng cách có thể phanh trước cua.
+
+Lượt kiểm tra ngày 27/11/2026 đạt **49,46 km/h** và duy trì trong dải yêu cầu
+**1,45 giây**, với **0 va chạm**, **0 chạm vạch** và **0 timeout cảm biến**.
+[Báo cáo ca đường trống](../output/poc_50kmh/verify/run_20261127_135052_456789/clear_road_50/run_20261127_135053_333556/summary.json)
+
+Bộ nghiệm thu mới đạt **16/16 bước**. Ca đường trống trong lượt ghi Full HD
+cũng giữ được **1,45 giây** trong dải yêu cầu. [Báo cáo tổng](../output/poc_50kmh/verify/run_20261127_135052_456789/summary.json) · [Demo 60 giây](../output/poc_50kmh/verify/run_20261127_135052_456789/demo_hd_60s.mp4)
+
+```bash
+python -m scripts.run_suite --host localhost --port 3000 --case clear-road
+```
+
+### Kết quả nghiệm thu trước đó
+
+Các ca vật cản và đường cong trên Town10HD_Opt dùng tốc độ mục tiêu 10 km/h.
+Ca TTC mở rộng trên Town05 dùng mục tiêu 30 km/h.
 
 ### 1. Kiểm tra điểm mù bằng LiDAR — PASS
 

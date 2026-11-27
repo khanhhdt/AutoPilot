@@ -172,7 +172,11 @@ def run_suite(run, client, name, module, count, *arguments, phase4=False, no_lan
             require(all(trial["metrics"]["lane_invasions"] == 0 for trial in report["trials"]),
                     f"Unexpected lane marking events, see {path}")
         check_idle_world(client)
-        return {"report": str(path), "trials": count}
+        checks = {"report": str(path), "trials": count}
+        for trial in report["trials"]:
+            if "clear_road_speed" in trial:
+                checks["clear_road_speed"] = trial["clear_road_speed"]
+        return checks
 
     run.step(name, python_module(module, *CONNECTION, *arguments, "--out", directory), check=check_suite)
     return find_artifact(directory, "run_*/summary.json")
@@ -210,6 +214,7 @@ def main() -> int:
     exit_code = 0
     try:
         run.step("preflight", check=check_environment)
+        run_suite(run, client, "clear_road_50", "scripts.run_suite", 1, "--case", "clear-road")
         evaluate_lanes(run, record_lanes(run, client))
         run_suite(run, client, "phase4", "scripts.scenarios", 20, "--suite", phase4=True)
         run_suite(run, client, "avoid_rear", "scripts.run_suite", 1, "--case", "avoid-rear")
